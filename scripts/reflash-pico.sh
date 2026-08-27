@@ -1,5 +1,5 @@
 #!/bin/bash
-# reflash-pico.sh — one-shot Pico re-flash on Gilbert once it's in RPI-RP2 bootloader.
+# reflash-pico.sh — one-shot Pico re-flash on the host machine once it's in RPI-RP2 bootloader.
 # Waits for the bootloader drive, drops CircuitPython on it, waits for CIRCUITPY,
 # copies the debug firmware, ejects. Tolerant of the drive vanishing mid-write
 # (the RP2040 reboots the instant the UF2 lands — that's expected).

@@ -1,8 +1,8 @@
 # code.py — AppSpace Pico HID actuator (RP2040 / CircuitPython).
 #
 # The dumb, reliable end of the "brain drives the real apps" rig:
-#   Gilbert's brain  --(newline-delimited JSON over usb_cdc.data)-->  THIS Pico
-#   THIS Pico        --(real USB HID reports, back into Gilbert)---->  the OS/apps
+#   the host machine's brain  --(newline-delimited JSON over usb_cdc.data)-->  THIS Pico
+#   THIS Pico        --(real USB HID reports, back into the host machine)---->  the OS/apps
 #
 # The input arrives as genuine external USB HID: no OS-level synthetic-event
 # fingerprint for platforms to detect. The command channel (usb_cdc.data) is a
@@ -366,7 +366,7 @@ def press_key(spec):
 
 # ---------------------------------------------------------------------------------
 # Self-test: trace a small square then type a string. Purely eyes-on confirmation
-# that this Pico is really driving Gilbert's cursor + keyboard.
+# that this Pico is really driving the host machine's cursor + keyboard.
 # ---------------------------------------------------------------------------------
 def self_test(text):
     # a square roughly in the upper-left quadrant of the logical space
@@ -498,7 +498,7 @@ def _poll_line():
     return bytes(raw).decode("utf-8", "ignore").strip()
 
 
-# two-blink boot heartbeat so Steven sees the firmware started
+# two-blink boot heartbeat blink heartbeat so you can see the firmware started
 for _ in range(2):
     _blink(True)
     time.sleep(0.08)

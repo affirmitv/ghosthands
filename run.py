@@ -24,7 +24,7 @@ def main():
     else:
         print("need --goal-file or --goal"); sys.exit(2)
     if not Config.api_key:
-        print("no OPENROUTER_API_KEY (env or ~/.affirmi-secrets/openrouter.env)"); sys.exit(2)
+        print("no OPENROUTER_API_KEY (env or ~/.config/ghosthands/openrouter.env)"); sys.exit(2)
     agent = Agent(Planner(), Grounder(), make_hands(a.hands), run_dir=a.run_dir)
     print("planner=%s grounder=%s hands=%s run_dir=%s" % (
         Config.planner_model, Config.grounder_model, a.hands or Config.hands_backend, a.run_dir))

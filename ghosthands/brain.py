@@ -1,20 +1,28 @@
 """Brain: a Planner (vision LLM that decides the next action) and a Grounder
 (GUI model that turns a described target into a pixel coordinate). Any
 OpenAI-compatible endpoint works; defaults are cheap models on OpenRouter."""
-import json, base64, re, urllib.request
+import json, base64, re, time, urllib.request
 from .config import Config
 
 def _chat(model, messages, max_tokens=400, temperature=0.0):
     body = {"model": model, "temperature": temperature, "max_tokens": max_tokens, "messages": messages}
-    req = urllib.request.Request(
-        Config.base_url.rstrip("/") + "/chat/completions",
-        data=json.dumps(body).encode(),
-        headers={"Authorization": "Bearer " + (Config.api_key or ""),
-                 "Content-Type": "application/json",
-                 "HTTP-Referer": "https://github.com/affirmi/ghosthands",
-                 "X-Title": "ghosthands"})
-    r = json.load(urllib.request.urlopen(req, timeout=120))
-    return r["choices"][0]["message"]["content"]
+    last = "no response"
+    for attempt in range(4):
+        try:
+            req = urllib.request.Request(Config.base_url.rstrip("/") + "/chat/completions",
+                data=json.dumps(body).encode(),
+                headers={"Authorization": "Bearer " + (Config.api_key or ""), "Content-Type": "application/json",
+                         "HTTP-Referer": "https://github.com/affirmi/ghosthands", "X-Title": "ghosthands"})
+            r = json.load(urllib.request.urlopen(req, timeout=120))
+            c = (((r.get("choices") or [{}])[0]).get("message") or {}).get("content")
+            if c and c.strip():
+                return c
+            last = "empty content %r" % c
+        except Exception as e:
+            last = "%s" % e
+        time.sleep(1.0 + attempt)
+        body["temperature"] = min(0.4, (body.get("temperature") or 0.0) + 0.15)
+    raise RuntimeError("LLM call failed after retries: " + last)
 
 def _img(path):
     b = base64.b64encode(open(path, "rb").read()).decode()

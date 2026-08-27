@@ -6,7 +6,7 @@
 #   take effect here — calling them from code.py is a no-op because USB is already
 #   enumerated. This is the #1 gotcha of the whole rig.
 #
-# WHAT IT BUILDS (a single composite USB device that Gilbert sees as ordinary
+# WHAT IT BUILDS (a single composite USB device that the host machine sees as ordinary
 # external hardware — electrically indistinguishable from a human at the keyboard):
 #   1. HID keyboard (the standard boot keyboard).
 #   2. HID ABSOLUTE-positioning mouse (custom descriptor below): the brain commands
@@ -14,7 +14,7 @@
 #      wheel. Absolute (not relative) so "put the cursor at (x,y)" is one report.
 #   3. ONE usb_cdc DATA serial channel (console disabled) that the brain writes
 #      newline-delimited JSON commands into. The console REPL is intentionally OFF so
-#      exactly ONE /dev/tty.usbmodem* appears on Gilbert — port detection is trivial.
+#      exactly ONE /dev/tty.usbmodem* appears on the host machine — port detection is trivial.
 #
 # Recovery note: if you ever need the REPL back to debug, flip CONSOLE below to True,
 # save, and the board re-enumerates with a second serial port (the REPL).

@@ -5,7 +5,7 @@ def _load_key():
     k = os.environ.get("OPENROUTER_API_KEY")
     if k:
         return k.strip()
-    kf = os.environ.get("GH_KEY_FILE", os.path.expanduser("~/.affirmi-secrets/openrouter.env"))
+    kf = os.environ.get("GH_KEY_FILE", os.path.expanduser("~/.config/ghosthands/openrouter.env"))
     if os.path.exists(kf):
         for line in open(kf):
             m = re.match(r'\s*(?:export\s+)?OPENROUTER_API_KEY\s*=\s*(.+)', line)
