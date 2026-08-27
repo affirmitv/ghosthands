@@ -1,0 +1,27 @@
+"""Central config for ghosthands. Everything overridable via environment."""
+import os, re
+
+def _load_key():
+    k = os.environ.get("OPENROUTER_API_KEY")
+    if k:
+        return k.strip()
+    kf = os.environ.get("GH_KEY_FILE", os.path.expanduser("~/.affirmi-secrets/openrouter.env"))
+    if os.path.exists(kf):
+        for line in open(kf):
+            m = re.match(r'\s*(?:export\s+)?OPENROUTER_API_KEY\s*=\s*(.+)', line)
+            if m:
+                return m.group(1).strip().strip('"').strip("'")
+    return None
+
+class Config:
+    api_key        = _load_key()
+    base_url       = os.environ.get("GH_BASE_URL", "https://openrouter.ai/api/v1")
+    # Planner = the "brain": a cheap VISION LLM that sees the screen and decides the next action.
+    planner_model  = os.environ.get("GH_PLANNER_MODEL", "z-ai/glm-5.3-flash")
+    # Grounder = the "eyes->coords": a GUI grounding model that turns "click X" into a pixel.
+    grounder_model = os.environ.get("GH_GROUNDER_MODEL", "bytedance/ui-tars-1.5-7b")
+    frame          = os.environ.get("GH_FRAME", "/tmp/gh_frame.jpg")
+    trigger        = os.environ.get("GH_TRIGGER", "/tmp/gh_capture_now")
+    pico_port      = os.environ.get("GH_PICO_PORT", "/dev/cu.usbmodem1101")
+    hands_backend  = os.environ.get("GH_HANDS", "pico")  # pico | dryrun
+    runs_dir       = os.environ.get("GH_RUNS_DIR", os.path.expanduser("~/gh-runs"))

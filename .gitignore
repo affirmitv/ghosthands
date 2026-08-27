@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+gh-runs/
+*.env
+.DS_Store
+scratchpad/
