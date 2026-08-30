@@ -25,3 +25,11 @@ One JSON object per line over the serial port at 115200; one ack per command:
 `{"move":{"x":0..32767,"y":0..32767}}` (absolute), `{"click":"left"}`, `{"type":"..."}`,
 `{"key":["cmd","space"]}`, `{"scroll":n}`, `{"ping":1}`. Coordinates are absolute over a
 0..32767 grid; `ghosthands` maps screen fractions onto that, so it is resolution-independent.
+
+Scroll accepts an int (`{"scroll":5}`, 5 notches) or an object
+(`{"scroll":{"amount":5,"steps_per_notch":6,"smooth":true}}`; only `amount` is required). The
+sign is the raw wheel direction; which way the page moves depends on the host's scroll-direction
+setting (on the tested macOS, `+` scrolled the page down). Scroll is smooth/eased in firmware:
+each notch expands into `SCROLL_STEPS_PER_NOTCH` (default 2) 1-unit wheel reports on a
+lightly-jittered ease-in/ease-out cadence, ending with a wheel=0 release. `{"scrolltest":n}`
+scrolls one way, pauses, scrolls back (eyes-on check).

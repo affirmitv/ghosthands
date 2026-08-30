@@ -18,7 +18,15 @@
 #   {"click":"left"|"right"|"middle"|"double"}
 #   {"down":"left"|"right"|"middle"}       press & hold  (for drags)
 #   {"up":"left"|"right"|"middle"}         release
-#   {"scroll":<int>}                        wheel ticks (+ up / - down)
+#   {"scroll":<int>}                        smooth eased wheel scroll, n notches. The sign is the
+#                                           raw wheel direction; which way the PAGE moves depends on
+#                                           the host's scroll-direction setting. On the tested macOS,
+#                                           + scrolled the page DOWN (toward footer), - scrolled UP.
+#   {"scroll":{"amount":5,"steps_per_notch":6,"pace":1.5,"smooth":true}}
+#                                           object form: amount (sign per note above) required;
+#                                           optional steps_per_notch (travel/notch), pace (speed:
+#                                           >1 slower, <1 faster), smooth (false = legacy feel)
+#   {"scrolltest":<n>}                      scroll one way n, pause, scroll back (eyes-on test)
 #   {"type":"some text"}                    typed with human jitter + rare typo+fix
 #   {"key":"enter"} | {"key":["cmd","t"]}   a named key or a chord
 #   {"ping":true}                           liveness -> ack {"ok":true,"pong":true,...}
@@ -62,8 +70,17 @@ TYPE_WORDPAUSE = (0.12, 0.4)    # occasional longer "thinking" pause
 TYPE_WORDPAUSE_PROB = 0.10      # chance of a longer pause after a keystroke
 TYPE_TYPO_PROB = 0.035          # chance a keystroke is a wrong-key + backspace + fix
 
-SCROLL_TICK = (1, 3)            # wheel units per emitted report
-SCROLL_SLEEP = (0.02, 0.055)    # delay between scroll reports
+# --- Scroll feel (USER-TUNABLE — all safe to adjust live; this is the whole "how far / how smooth"
+#     dial). If a notch scrolls too far/short for your host, change STEPS_PER_NOTCH (or pass
+#     steps_per_notch per command). If it feels too fast/slow, change the SLEEP knobs. ---
+SCROLL_UNIT = 1                 # wheel units per emitted report — keep 1 (finest + smoothest)
+SCROLL_STEPS_PER_NOTCH = 2      # travel per logical notch (unit-reports/notch). Raise=further, lower=finer.
+                                # Overridable per command: {"scroll":{"amount":5,"steps_per_notch":N}}
+SCROLL_MIN_SLEEP = 0.016        # eased cadence: fastest gap, mid-flick (smaller = faster scroll)
+SCROLL_MAX_SLEEP = 0.050        # eased cadence: slowest gap, at the ramp ends
+                                # (per-command "pace" scales BOTH live: >1 slower, <1 faster)
+SCROLL_MAX_REPORTS = 4000       # hard cap on reports per scroll (bounds huge amounts)
+SCROLL_SLEEP_RANGE = (0.02, 0.055)  # legacy (smooth=false) delay between scroll reports
 
 random.seed(time.monotonic_ns() & 0x7FFFFFFF)
 
@@ -258,19 +275,63 @@ def double_click():
     click("left")
 
 
-def scroll(dy):
+def scroll(dy, steps_per_notch=None, pace=1.0):
+    """Smooth, human-looking wheel scroll. A logical "dy notches" expands into
+    dy * SCROLL_STEPS_PER_NOTCH small unit-reports, paced with an ease-in/ease-out
+    ramp and light jitter (start slow, quicker middle, slow arrival): a human
+    flick instead of a machine burst. `pace` scales the cadence live (>1 = slower,
+    <1 = faster) so scroll SPEED is tunable per command with no re-flash. Ends with
+    a wheel=0 release report. Returns the number of wheel reports (excluding the zero)."""
     dy = int(dy)
     if dy == 0:
         _send(_cx, _cy, 0)
-        return
+        return 0
+    if steps_per_notch is None:
+        steps_per_notch = SCROLL_STEPS_PER_NOTCH
+    steps = int(_clamp(int(steps_per_notch), 1, 32))
+    try:
+        pace = _clamp(float(pace), 0.2, 12.0)
+    except (TypeError, ValueError):
+        pace = 1.0
     sign = 1 if dy > 0 else -1
-    remaining = abs(dy)
-    while remaining > 0:
-        tick = min(remaining, random.randint(SCROLL_TICK[0], SCROLL_TICK[1]))
-        _send(_cx, _cy, sign * tick)
-        remaining -= tick
-        time.sleep(_rand(SCROLL_SLEEP))
-    _send(_cx, _cy, 0)
+    n = int(_clamp(abs(dy) * steps, 1, SCROLL_MAX_REPORTS))
+    for i in range(1, n + 1):
+        # ease-in/ease-out pacing: slower at the start and end, quickest through the
+        # middle, with light per-step jitter: a human flick, not a machine burst.
+        # `pace` scales the whole cadence so speed is tunable per command.
+        d = abs(2.0 * i / n - 1.0)  # 0 mid-action, 1 at either end of the ramp
+        base = SCROLL_MIN_SLEEP + _smoothstep(d) * (SCROLL_MAX_SLEEP - SCROLL_MIN_SLEEP)
+        gap = _clamp((base + random.uniform(-0.003, 0.003)) * pace, 0.004, 0.5)
+        _send(_cx, _cy, sign * SCROLL_UNIT)
+        time.sleep(gap)
+    _send(_cx, _cy, 0)          # fail-safe: always release the wheel
+    return n
+
+
+def _scroll_legacy(dy):
+    """The old one-report-per-notch feel, still 1 unit and still zero-terminated."""
+    dy = int(dy)
+    if dy == 0:
+        _send(_cx, _cy, 0)
+        return 0
+    sign = 1 if dy > 0 else -1
+    n = int(_clamp(abs(dy), 1, SCROLL_MAX_REPORTS))
+    for _ in range(n):
+        _send(_cx, _cy, sign * SCROLL_UNIT)
+        time.sleep(_rand(SCROLL_SLEEP_RANGE))
+    _send(_cx, _cy, 0)          # fail-safe: always release the wheel
+    return n
+
+
+def scroll_test(n=10):
+    """Eyes-on test: scroll DOWN n notches, pause ~0.5s, scroll UP n notches —
+    both via the new smooth path. Lets a human prove the fix on-device after a
+    re-flash (echo '{"scrolltest":12}' > /dev/cu.usbmodem...)."""
+    n = int(_clamp(int(n), 1, SCROLL_MAX_REPORTS))
+    scroll(-n)
+    time.sleep(0.5)
+    scroll(n)
+    return n
 
 
 # ---------------------------------------------------------------------------------
@@ -430,8 +491,31 @@ def handle(cmd):
         return {"cmd": "up", "which": cmd["up"]}
 
     if "scroll" in cmd:
-        scroll(cmd["scroll"])
-        return {"cmd": "scroll", "dy": int(cmd["scroll"])}
+        s = cmd["scroll"]
+        if isinstance(s, dict):
+            amount = s.get("amount")
+            if amount is None:
+                raise ValueError("scroll object needs 'amount'")
+            amount = int(amount)
+            spn = s.get("steps_per_notch")
+            if spn is not None:
+                spn = int(spn)
+            pace = s.get("pace", 1.0)
+            smooth = s.get("smooth", True)
+        else:
+            amount = int(s)
+            spn = None
+            pace = 1.0
+            smooth = True
+        reports = (scroll(amount, spn, pace) if smooth else _scroll_legacy(amount))
+        return {"cmd": "scroll", "amount": amount, "reports": reports}
+
+    if "scrolltest" in cmd:
+        n = cmd["scrolltest"]
+        if isinstance(n, bool) or not n:
+            n = 10                  # {"scrolltest":true}/0/null -> default, like selftest
+        n = scroll_test(n)
+        return {"cmd": "scrolltest", "amount": n}
 
     if "type" in cmd:
         n = type_text(str(cmd["type"]))

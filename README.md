@@ -62,6 +62,16 @@ python3 run.py --goal "Open TextEdit and type hello" \
 Every step is logged to `~/gh-runs/<run>/log.jsonl` with a screenshot per step. The brain pauses
 at **money checkpoints** (see Safety) so a human can eyeball an irreversible click.
 
+## Scroll
+
+The Pico sends wheel input as many small 1-unit reports on a lightly-jittered ease-in/ease-out
+cadence (a human flick, not a machine burst), so it stays smooth in native apps and custom web
+scroll containers (the Instagram feed included). `{"scroll":5}` scrolls 5 notches; the sign is
+the raw wheel direction and which way the page moves follows the host's scroll-direction setting
+(on the tested macOS, `+` scrolled the page down). The richer form
+`{"scroll":{"amount":5,"steps_per_notch":6,"smooth":true}}` tunes travel per notch, and
+`{"scrolltest":n}` scrolls one way then back so you can watch it.
+
 ## Safety
 
 - The planner is instructed never to commit a price/charge until it has read the value back and
