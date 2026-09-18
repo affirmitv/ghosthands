@@ -43,7 +43,16 @@ class Agent:
             try:
                 plan, raw = self.planner.decide(goal, guide, frame, self.history, (w, h))
             except Exception as e:
-                self._log("planner_error", str(e)); return "planner_error"
+                # A stuck popup or menu blocks the page reader; one Escape and one retry.
+                self._log("planner_retry", str(e)[:200])
+                try:
+                    if hasattr(self.planner, "recover"):
+                        self.planner.recover(self.hands)
+                    else:
+                        self.hands.key("escape"); time.sleep(0.6)
+                    plan, raw = self.planner.decide(goal, guide, frame, self.history, (w, h))
+                except Exception as e2:
+                    self._log("planner_error", str(e2)[:300]); return "planner_error"
             act = plan.get("action", "")
             self._log("plan", "%s | %s" % (act, (plan.get("observation") or "")[:90]),
                       {"plan": plan})
@@ -113,6 +122,14 @@ class Agent:
                 if plan.get("select_all"):
                     self.hands.key("cmd+a"); time.sleep(0.08)
             self.hands.type(plan.get("text", ""))
+        elif a == "select":
+            # Native <select>: open it, type the option (popup type-ahead), confirm with Return.
+            # One sequence, because the open popup blocks the page until it closes.
+            frac = self._point(plan, frame, plan.get("target", ""), dims)
+            self.hands.move(frac[0], frac[1]); time.sleep(0.18)
+            self.hands.click(); time.sleep(0.5)
+            self.hands.type(plan.get("text", "")); time.sleep(0.3)
+            self.hands.key("return"); time.sleep(0.3)
         elif a == "key":
             self.hands.key(plan.get("keys", ""))
         elif a == "scroll":

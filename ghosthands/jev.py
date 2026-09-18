@@ -28,6 +28,7 @@ class JevError(RuntimeError):
 OPERATIONS: "OrderedDict[str, str]" = OrderedDict([
     ("CLICK", "Click one element (button, link, tab, checkbox)"),
     ("TYPE_TEXT", "Type text into one text field or combobox (clears it first)"),
+    ("SELECT", "Choose an option in one dropdown (native select)"),
     ("KEY_ENTER", "Press Enter to submit the focused field"),
     ("SCROLL_DOWN", "Scroll the page down to reveal more"),
     ("SCROLL_UP", "Scroll the page up"),
@@ -100,6 +101,15 @@ class JevDecider:
         }
         clickable = [e for e in screen.elements if "CLICK" in e.operations()]
         typable = [e for e in screen.elements if "TYPE_TEXT" in e.operations()]
+        selects = [e for e in screen.elements if "SELECT" in e.operations()]
+        if not selects:
+            questions["operation"]["criteria"].pop("SELECT", None)
+        else:
+            questions["select_target"] = {
+                "type": "choice",
+                "criteria": {e.index: ("%s %s (%s)" % (e.role, e.label, e.value))[:100] for e in selects},
+                "instructions": {"goal": goal, "task": "Pick the dropdown to change for the next step toward the goal."},
+            }
         # Offer only operations that have a target (jev-ultrafast: "only supported
         # operations and targets are offered").
         if not clickable:
@@ -259,8 +269,8 @@ class JevPlanner:
         if not op_p and probs:
             op_p = float(probs.get(operation) or 0.0)
 
-        target_ans = answers.get("click_target") if operation == "CLICK" else \
-            answers.get("type_target") if operation == "TYPE_TEXT" else None
+        target_ans = {"CLICK": answers.get("click_target"), "TYPE_TEXT": answers.get("type_target"),
+                      "SELECT": answers.get("select_target")}.get(operation)
         tgt_p = 1.0
         if target_ans:
             tgt_p = float(target_ans.get("confidence") or 0.0)
@@ -268,16 +278,18 @@ class JevPlanner:
                 tgt_p = float((target_ans.get("probabilities") or {}).get(target_ans.get("choice")) or 0.0)
 
         plan: dict = {}
-        if operation in ("CLICK", "TYPE_TEXT"):
+        if operation in ("CLICK", "TYPE_TEXT", "SELECT"):
             el = screen.by_index(target_ans["choice"])
             fx, fy = el.screen_point(screen.viewport, screen.screen)
             desc = "[%s] %s %s" % (el.index, el.role, el.label)
-            plan["action"] = "click" if operation == "CLICK" else "type"
+            plan["action"] = {"CLICK": "click", "TYPE_TEXT": "type", "SELECT": "select"}[operation]
             plan["target"] = desc
             plan["point"] = [fx, fy]
             if operation == "TYPE_TEXT":
                 plan["text"] = self._type_value(goal, guide, screen, el, res, history)
                 plan["select_all"] = True
+            elif operation == "SELECT":
+                plan["text"] = self._select_option(goal, screen, el, history)
         elif operation == "KEY_ENTER":
             plan = {"action": "key", "keys": "return"}
         elif operation == "SCROLL_DOWN":
@@ -317,6 +329,18 @@ class JevPlanner:
                        "settle_s": round(settled_s, 2), "controls": len(screen.elements)}
         return plan, json.dumps(res["raw"], separators=(",", ":"))
 
+    def recover(self, hands) -> None:
+        """Unblock the page reader. A native <select> popup or context menu freezes Safari's
+        AppleEvents until it closes; Escape alone does not always close it, a click on the
+        window's own toolbar does. Uses the last known window geometry."""
+        scr = self.last_screen
+        if scr and scr.viewport.get("ow"):
+            vp = scr.viewport
+            fx = (vp.get("sx", 0) + vp["ow"] / 2.0) / max(1, scr.screen[0])
+            fy = (vp.get("sy", 0) + 12) / max(1, scr.screen[1])
+            hands.move(fx, fy); time.sleep(0.15); hands.click(); time.sleep(0.3)
+        hands.key("escape"); time.sleep(0.5)
+
     def _settled_snapshot(self, history: list[str]) -> tuple[Screen, float]:
         """Read the element table; after an action, keep re-reading (cheap, ~0.1 s) until the
         page differs from the table that action was planned on, or the settle timeout passes.
@@ -330,7 +354,10 @@ class JevPlanner:
             return screen, 0.0
         t0 = time.time()
         before = prev.fingerprint()
-        while screen.fingerprint() == before and time.time() - t0 < self.settle_timeout:
+        # Unchanged, or a page with no controls yet (a route change that is still rendering):
+        # keep reading until it moves on or the timeout passes.
+        while (screen.fingerprint() == before or not screen.elements) and \
+                time.time() - t0 < self.settle_timeout:
             time.sleep(self.settle_poll)
             screen = self.reader.snapshot()
         # Then require the table to hold still: two reads 0.25 s apart with the same
@@ -344,6 +371,21 @@ class JevPlanner:
                 break
             screen = again
         return screen, time.time() - t0
+
+    def _select_option(self, goal: str, screen: Screen, el: Element, history: list[str]) -> str:
+        """Ask Jev which option of a native <select> serves the goal."""
+        if not el.options:
+            raise JevError("select %s has no options to choose from" % el.index)
+        state = screen.to_jev_state(history)
+        state["page"]["field"] = {"index": el.index, "label": el.label, "value": el.value}
+        q = {"select_option": {"type": "choice", "criteria": {o: "option" for o in el.options},
+                               "instructions": {"goal": goal,
+                                                "task": "Pick the dropdown option that serves the goal."}}}
+        ans = self.decider.ask(state, q)["answers"]["select_option"]
+        p = float(ans.get("confidence") or (ans.get("probabilities") or {}).get(ans["choice"]) or 0.0)
+        if p < self.min_target_confidence:
+            raise JevError("no confident option for select %s (best %r p=%.2f)" % (el.index, ans["choice"], p))
+        return ans["choice"]
 
     def _type_value(self, goal: str, guide: str, screen: Screen, el: Element,
                     res: dict, history: list[str]) -> str:

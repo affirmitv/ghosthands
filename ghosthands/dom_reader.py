@@ -56,7 +56,7 @@ SNAPSHOT_JS = r"""(() => {
     const t = el.tagName;
     if (t === 'A') return 'link';
     if (t === 'BUTTON' || t === 'SUMMARY') return 'button';
-    if (t === 'SELECT') return 'combobox';
+    if (t === 'SELECT') return 'select';
     if (t === 'TEXTAREA') return 'textbox';
     if (t === 'INPUT') {
       const ty = (el.type || '').toLowerCase();
@@ -94,8 +94,13 @@ SNAPSHOT_JS = r"""(() => {
   const push = (el, r, forcedRole) => {
     if (seen.some(s => Math.abs(s[0] - r.top) < 2 && Math.abs(s[1] - r.left) < 2)) return;
     seen.push([r.top, r.left]); taken.push(el);
-    out.push({label: name(el), role: forcedRole || role(el), value: val(el),
-      x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height)});
+    const item = {label: name(el), role: forcedRole || role(el), value: val(el),
+      x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height)};
+    if (el.tagName === 'SELECT') {
+      item.options = [].map.call(el.options, o => txt(o.textContent).slice(0, 60)).filter(Boolean).slice(0, 40);
+      if (!item.label && item.options.length) item.label = 'select: ' + item.options.slice(0, 3).join(' / ');
+    }
+    out.push(item);
   };
   document.querySelectorAll(SEL).forEach(el => { const r = vis(el); if (r) push(el, r); });
   // Legacy sites (Angular Material lists, table rows with handlers) make plain divs/rows
@@ -182,9 +187,10 @@ class Element:
     """One interactive control, indexed, with viewport-rect coordinates."""
 
     def __init__(self, index: str, label: str, role: str, value: str,
-                 x: float, y: float, w: float, h: float) -> None:
+                 x: float, y: float, w: float, h: float, options: Optional[list] = None) -> None:
         self.index, self.label, self.role, self.value = index, label, role, value
         self.x, self.y, self.w, self.h = x, y, w, h
+        self.options: list[str] = list(options or [])
 
     def screen_point(self, viewport: dict, screen: tuple[int, int]) -> tuple[float, float]:
         """Element center as (fx, fy) fractions of the screen in [0, 1]."""
@@ -197,6 +203,10 @@ class Element:
 
     def operations(self) -> list[str]:
         """Operations the hands can perform on this element."""
+        if self.role == "select":
+            # A native <select> opens an OS popup that blocks the page until it closes, so it
+            # is driven as one keyboard sequence (click, type the option, Return), never clicked bare.
+            return ["SELECT"]
         if self.role in ("textbox", "combobox", "searchbox"):
             return ["TYPE_TEXT", "CLICK"]
         return ["CLICK"]
@@ -213,7 +223,7 @@ class Screen:
     @classmethod
     def from_json(cls, data: dict, screen: tuple[int, int]) -> "Screen":
         els = [Element(str(i + 1), e.get("label", ""), e.get("role", ""),
-                       e.get("value", ""), e["x"], e["y"], e["w"], e["h"])
+                       e.get("value", ""), e["x"], e["y"], e["w"], e["h"], e.get("options"))
                for i, e in enumerate(data.get("elements", []))]
         return cls(data.get("title", ""), data.get("url", ""), data.get("text", ""),
                    data.get("viewport", {}), els, screen)
@@ -234,8 +244,9 @@ class Screen:
     def to_jev_state(self, recent_actions: list[str]) -> dict:
         return {
             "page": {"title": self.title, "url": self.url, "text": self.text},
-            "elements": [{"index": e.index, "label": e.label, "role": e.role,
-                          "value": e.value, "operations": e.operations()}
+            "elements": [dict({"index": e.index, "label": e.label, "role": e.role,
+                               "value": e.value, "operations": e.operations()},
+                              **({"options": e.options} if e.options else {}))
                          for e in self.elements],
             "recent_actions": recent_actions[-8:],
         }
