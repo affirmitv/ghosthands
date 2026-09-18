@@ -69,8 +69,8 @@ class TestElement(unittest.TestCase):
         e = Element("1", "B", "button", "", 200, 300, 100, 40)
         self.assertEqual(e.screen_point(VP, SCR), (0.175, 0.29375))
         off = Element("2", "B", "button", "", 2500, -500, 100, 40)
-        fx, fy = off.screen_point(VP, SCR)
-        self.assertEqual((fx, fy), (1.0, 0.0))
+        with self.assertRaises(ValueError):
+            off.screen_point(VP, SCR)
 
     def test_operations(self):
         self.assertEqual(Element("1", "t", "textbox", "", 0, 0, 1, 1).operations(),
@@ -275,7 +275,7 @@ class TestGates(unittest.TestCase):
                                                "probabilities": {"1": 0.9}}})
         plan, _ = p.decide("g", "", None, ["click: something"], (0, 0))
         self.assertEqual(plan["action"], "verify_stop")
-        self.assertIn("commit control", plan["reason"])
+        self.assertIn("commit step", plan["reason"])
         plan, _ = p.decide("g", "", None, ["[human reviewed checkpoint and approved -> continue]"], (0, 0))
         self.assertEqual(plan["action"], "click")
 

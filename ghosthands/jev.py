@@ -45,7 +45,7 @@ _RULES = (
     "than stop; choose DONE only when the goal is visible"
 )
 
-_KEY_RE = re.compile(r"^\s*(name|id|product id|email|password|title|url|price|plan|team|code)\s*:\s*(.+)$", re.I | re.M)
+_KEY_RE = re.compile(r"^\s*(name|id|product id|email|title|url|price|plan|team|code)\s*:\s*(.+)$", re.I | re.M)
 _NUM_RE = re.compile(r"(?<![A-Za-z\d.])\$?\d+(?:\.\d+)?(?![A-Za-z\d])")
 _DOTTED_RE = re.compile(r"\b[a-z][a-z0-9]*(?:\.[a-z0-9]+){2,}\b", re.I)
 _URL_RE = re.compile(r"https?://\S+")
@@ -77,6 +77,16 @@ def extract_text_candidates(goal: str, guide: str) -> list[str]:
     return out[:24]
 
 
+_SECRET_LINE_RE = re.compile(r"^.*\b(password|passwd|pwd|token|secret|api[_ -]?key|cvv|cvc|card number)\b.*$", re.I | re.M)
+
+
+def scrub_guide(guide: str) -> str:
+    """Drop playbook lines that carry a credential. Jev never needs the password to decide
+    which field to click; the text helper never needs it either (the human types it, or the
+    playbook uses a placeholder). Nothing secret leaves the machine in the decision state."""
+    return _SECRET_LINE_RE.sub("[line withheld: credential]", guide or "")
+
+
 class JevDecider:
     """Posts structured state + choice questions to the Jev decisions endpoint."""
 
@@ -96,7 +106,7 @@ class JevDecider:
             "operation": {
                 "type": "choice",
                 "criteria": dict(OPERATIONS),
-                "instructions": {"goal": goal, "playbook": (guide or "")[:4000],
+                "instructions": {"goal": goal, "playbook": scrub_guide(guide)[:4000],
                                  "rules": _RULES},
             }
         }
@@ -212,7 +222,7 @@ class TextHelper:
         user = ("GOAL: %s\nPLAYBOOK: %s\nPAGE TITLE: %s\nFIELD: role=%s label=%s "
                 "current value=%s\nRECENT ACTIONS:\n%s\n\nReply with the exact "
                 "literal text to type into this field, nothing else."
-                % (goal, (guide or "")[:4000], screen.title, element.role,
+                % (goal, scrub_guide(guide)[:4000], screen.title, element.role,
                    element.label, element.value or "(empty)", hist))
         raw = _chat(self.model, [
             {"role": "system", "content": "You fill ONE form field for a screen "
@@ -253,6 +263,7 @@ class JevPlanner:
         self.min_target_confidence = (Config.jev_min_target_confidence if min_target_confidence is None
                                       else min_target_confidence)
         self.last_screen: Optional[Screen] = None
+        self._pending_commit: Optional[tuple] = None  # (url, control) a human is being asked to approve
         self.settle_timeout = Config.jev_settle_s  # seconds to wait for the page to change after an action
         self.settle_poll = 0.15
 
@@ -281,7 +292,12 @@ class JevPlanner:
         plan: dict = {}
         if operation in ("CLICK", "TYPE_TEXT", "SELECT"):
             el = screen.by_index(target_ans["choice"])
-            fx, fy = el.screen_point(screen.viewport, screen.screen)
+            try:
+                fx, fy = el.screen_point(screen.viewport, screen.screen)
+            except ValueError as e:
+                return ({"action": "verify_stop", "reason": str(e),
+                         "observation": "control off the main display", "reasoning": "jev %s" % operation},
+                        json.dumps(res["raw"], separators=(",", ":")))
             desc = "[%s] %s %s" % (el.index, el.role, el.label)
             plan["action"] = {"CLICK": "click", "TYPE_TEXT": "type", "SELECT": "select"}[operation]
             plan["target"] = desc
@@ -314,11 +330,22 @@ class JevPlanner:
             plan = {"action": "verify_stop",
                     "reason": "low confidence %s p=%s target p=%s"
                               % (operation, round(op_p, 2), round(tgt_p, 2))}
-        elif operation == "CLICK" and is_commit_control(plan.get("target", "")) and \
-                not (history and history[-1].startswith("[human")):
-            plan = {"action": "verify_stop",
-                    "reason": "commit control %s: confirm the value on screen, then CONTINUE"
-                              % plan.get("target", "")}
+        else:
+            commit_desc = None
+            if operation == "CLICK" and is_commit_control(plan.get("target", "")):
+                commit_desc = plan["target"]
+            elif operation == "KEY_ENTER" and any(is_commit_control(e.label) for e in screen.elements):
+                commit_desc = "KEY_ENTER on a page with a commit control"
+            if commit_desc is not None:
+                approved = (history and history[-1].startswith("[human")
+                            and self._pending_commit == (screen.url, commit_desc))
+                if not approved:
+                    self._pending_commit = (screen.url, commit_desc)
+                    plan = {"action": "verify_stop",
+                            "reason": "commit step %s: confirm the value on screen, then CONTINUE"
+                                      % commit_desc}
+                else:
+                    self._pending_commit = None
 
         plan["observation"] = "%d controls on '%s'" % (len(screen.elements), screen.title)
         plan["observation"] = plan["observation"][:160]

@@ -43,13 +43,12 @@ class Agent:
             try:
                 plan, raw = self.planner.decide(goal, guide, frame, self.history, (w, h))
             except Exception as e:
-                # A stuck popup or menu blocks the page reader; one Escape and one retry.
+                if not hasattr(self.planner, "recover"):
+                    self._log("planner_error", str(e)); return "planner_error"
+                # Jev lane only: a stuck popup or menu blocks the page reader; recover, retry once.
                 self._log("planner_retry", str(e)[:200])
                 try:
-                    if hasattr(self.planner, "recover"):
-                        self.planner.recover(self.hands)
-                    else:
-                        self.hands.key("escape"); time.sleep(0.6)
+                    self.planner.recover(self.hands)
                     plan, raw = self.planner.decide(goal, guide, frame, self.history, (w, h))
                 except Exception as e2:
                     self._log("planner_error", str(e2)[:300]); return "planner_error"
@@ -128,7 +127,10 @@ class Agent:
             frac = self._point(plan, frame, plan.get("target", ""), dims)
             self.hands.move(frac[0], frac[1]); time.sleep(0.18)
             self.hands.click(); time.sleep(0.5)
-            self.hands.type(plan.get("text", "")); time.sleep(0.3)
+            # Popup type-ahead: a Space would confirm the highlighted item, so type only the
+            # option's first word (up to 8 characters), then Return.
+            prefix = (plan.get("text", "").split(" ")[0])[:8]
+            self.hands.type(prefix); time.sleep(0.3)
             self.hands.key("return"); time.sleep(0.3)
         elif a == "key":
             self.hands.key(plan.get("keys", ""))

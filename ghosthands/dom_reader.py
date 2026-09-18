@@ -197,8 +197,12 @@ class Element:
         chrome = viewport.get("oh", viewport["h"]) - viewport["h"]
         sx = viewport.get("sx", 0) + self.x + self.w / 2.0
         sy = viewport.get("sy", 0) + chrome + self.y + self.h / 2.0
-        fx = min(1.0, max(0.0, sx / max(1, screen[0])))
-        fy = min(1.0, max(0.0, sy / max(1, screen[1])))
+        fx, fy = sx / max(1, screen[0]), sy / max(1, screen[1])
+        if not (0.0 <= fx <= 1.0 and 0.0 <= fy <= 1.0):
+            # Safari on a second display (or a window dragged off screen): the hands map
+            # fractions onto the main display, so refuse rather than click something else.
+            raise ValueError("control %s at screen point (%.0f, %.0f) is outside the main display %sx%s"
+                             % (self.index, sx, sy, screen[0], screen[1]))
         return (fx, fy)
 
     def operations(self) -> list[str]:
