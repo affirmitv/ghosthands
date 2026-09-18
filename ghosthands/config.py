@@ -26,7 +26,13 @@ class Config:
     jev_url        = os.environ.get("GH_JEV_URL", "https://openrouter.ai/api/alpha/decisions")
     jev_model      = os.environ.get("GH_JEV_MODEL", "typesafe/jev-1.13")
     jev_text_model = os.environ.get("GH_JEV_TEXT_MODEL", "z-ai/glm-5.3-flash")  # writes TYPE_TEXT values only
-    jev_min_confidence = float(os.environ.get("GH_JEV_MIN_CONFIDENCE", "0.5"))  # below this -> verify_stop
+    jev_min_confidence = float(os.environ.get("GH_JEV_MIN_CONFIDENCE", "0.5"))  # operation below this -> verify_stop
+    # A target is one pick among many controls, so its winning probability runs lower than an
+    # operation's. 0.3 still means a clear winner over the runner-up on a page of 20 controls.
+    jev_min_target_confidence = float(os.environ.get("GH_JEV_MIN_TARGET_CONFIDENCE", "0.3"))
+    # After an action the planner re-reads the table (0.1 s each) until the page changes or this
+    # many seconds pass. Legacy sites fetch a tab's content over the network; give them time.
+    jev_settle_s   = float(os.environ.get("GH_JEV_SETTLE_S", "6.0"))
     frame          = os.environ.get("GH_FRAME", "/tmp/gh_frame.jpg")
     trigger        = os.environ.get("GH_TRIGGER", "/tmp/gh_capture_now")
     pico_port      = os.environ.get("GH_PICO_PORT", "/dev/cu.usbmodem1101")

@@ -175,8 +175,9 @@ class TestCandidates(unittest.TestCase):
 
 class TestPlanner(unittest.TestCase):
     def _screen(self):
+        # "Next" on purpose: a commit word like "Buy" is gated by design (see TestGates)
         return make_screen([el("Skip", "button", 100, 100, 80, 30),
-                            el("Buy", "button", 300, 200, 80, 30)])
+                            el("Next", "button", 300, 200, 80, 30)])
 
     def test_click_plan(self):
         answers = {"operation": {"type": "choice", "choice": "CLICK",
@@ -214,7 +215,8 @@ class TestPlanner(unittest.TestCase):
                                  "confidence": 0.95, "probabilities": {"TYPE_TEXT": 0.95}},
                    "type_target": {"type": "choice", "choice": "2",
                                    "confidence": 0.9, "probabilities": {"2": 0.9}}}
-        dec = FakeDecider(answers, ask_answers={"text_value": {"choice": "8.99"}})
+        dec = FakeDecider(answers, ask_answers={"text_value": {"choice": "8.99", "confidence": 0.9,
+                                                                "probabilities": {"8.99": 0.9}}})
         p = JevPlanner(reader=FakeReader(self._typable()), decider=dec,
                        text_helper=FakeText(), min_confidence=0.8)
         plan, _ = p.decide("g", "costs $8.99 monthly", "", [], (2000, 1600))
@@ -234,6 +236,77 @@ class TestPlanner(unittest.TestCase):
         plan, _ = p.decide("g", "", "", [], (2000, 1600))
         self.assertEqual(plan["text"], "WRITTEN")
         self.assertTrue(th.called)
+
+
+
+class TestGates(unittest.TestCase):
+    """Deterministic gates added after review: commit controls, probability fallback, text checks."""
+
+    def _planner(self, elements, answers, min_confidence=0.5):
+        from ghosthands.jev import JevPlanner
+        screen = make_screen(elements)
+
+        class R:
+            def snapshot(self):
+                return screen
+
+        class D:
+            model = "t"
+            def decide(self, goal, guide, scr, history):
+                return {"answers": answers, "usage": {"cost": 0.0}, "latency_s": 0.0, "raw": {}}
+            def ask(self, state, questions):
+                return {"answers": {"text_value": {"type": "choice", "choice": "__WRITE__",
+                                                   "probabilities": {"__WRITE__": 1.0}}}}
+
+        class T:
+            value = ""
+            def write(self, *a, **k):
+                return self.value
+
+        t = T()
+        return JevPlanner(reader=R(), decider=D(), text_helper=t,
+                          min_confidence=min_confidence, min_target_confidence=0.3), t
+
+    def test_commit_control_pauses_then_runs_after_approval(self):
+        p, _ = self._planner([el("Activate base plan", "button", 10, 10, 100, 30)],
+                             {"operation": {"type": "choice", "choice": "CLICK",
+                                            "probabilities": {"CLICK": 0.95}},
+                              "click_target": {"type": "choice", "choice": "1",
+                                               "probabilities": {"1": 0.9}}})
+        plan, _ = p.decide("g", "", None, ["click: something"], (0, 0))
+        self.assertEqual(plan["action"], "verify_stop")
+        self.assertIn("commit control", plan["reason"])
+        plan, _ = p.decide("g", "", None, ["[human reviewed checkpoint and approved -> continue]"], (0, 0))
+        self.assertEqual(plan["action"], "click")
+
+    def test_target_confidence_falls_back_to_probability(self):
+        p, _ = self._planner([el("Teams", "tab", 10, 10, 100, 30)],
+                             {"operation": {"type": "choice", "choice": "CLICK",
+                                            "probabilities": {"CLICK": 0.95}},
+                              "click_target": {"type": "choice", "choice": "1",
+                                               "probabilities": {"1": 0.9}}})
+        plan, _ = p.decide("g", "", None, [], (0, 0))
+        self.assertEqual(plan["action"], "click")
+        self.assertIn("p=0.90", plan["reasoning"])
+
+    def test_empty_text_helper_output_is_refused(self):
+        from ghosthands.jev import JevError
+        p, t = self._planner([el("Name", "textbox", 10, 10, 100, 30)],
+                             {"operation": {"type": "choice", "choice": "TYPE_TEXT",
+                                            "probabilities": {"TYPE_TEXT": 0.95}},
+                              "type_target": {"type": "choice", "choice": "1",
+                                              "probabilities": {"1": 0.9}}})
+        t.value = ""
+        with self.assertRaises(JevError):
+            p.decide("g", 'name: "Pro"', None, [], (0, 0))
+        t.value = "Pro"
+        plan, _ = p.decide("g", "", None, [], (0, 0))
+        self.assertEqual(plan["text"], "Pro")
+
+    def test_password_values_are_redacted_in_snapshot_js(self):
+        from ghosthands.dom_reader import SNAPSHOT_JS
+        self.assertIn("ty === 'password'", SNAPSHOT_JS)
+        self.assertIn("(filled, hidden)", SNAPSHOT_JS)
 
 
 if __name__ == "__main__":

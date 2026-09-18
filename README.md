@@ -15,8 +15,10 @@ It is three cheap parts:
 | ✋ **Hands** | a $4 Raspberry Pi Pico flashed as a USB-HID mouse+keyboard | Pico over serial |
 
 All of it runs over OpenRouter by default (Jev through OpenRouter's decisions endpoint, the LLMs
-through chat completions). On the fast lane a step is one Jev call: about **$0.0001 and 0.4 s**,
-no screenshot and no grounding call, because the element table already carries coordinates. The
+through chat completions). On the fast lane a click step is one Jev call: about **$0.0001 and 0.4 s**,
+no screenshot and no grounding call, because the element table already carries coordinates. A
+typing step adds one more Jev call to pick the literal, and a small text-model call only when
+the playbook holds no literal for that field. The
 expensive frontier model that *orchestrated* the task is out of the loop; the loop runs on pennies.
 
 ## Why real HID instead of software automation
@@ -50,7 +52,7 @@ python3 run.py --goal "Open TextEdit and type hello" \
 python3 run.py --planner jev \
                --goal "Open the schedule for the Oakland 14U Duckett team in this tournament." \
                --guide "Open the TEAMS tab, click the team, DONE when its games are listed."
-# No Pico yet? --hands osascript clicks through macOS System Events so you can watch the loop.
+# No Pico yet? --hands cliclick (brew install cliclick) moves your real pointer so you can watch the loop.
 ```
 
 ## The Jev fast lane
@@ -163,7 +165,7 @@ the raw wheel direction and which way the page moves follows the host's scroll-d
 ghosthands/        core library  (config, eyes, hands, brain, agent)
   jev.py           Jev fast lane: JevDecider (decisions endpoint), JevPlanner (drop-in brain)
   dom_reader.py    Safari element table with screen coordinates (no screenshot, no WebDriver)
-run.py             CLI  (--planner vision|jev, --hands pico|dryrun|osascript)
+run.py             CLI  (--planner vision|jev, --hands pico|dryrun|cliclick)
 tests/             offline unit tests  (python3 -m unittest discover tests)
 examples/          trace_square.py, streamon3_subscriptions.py
 scripts/           screenfeed.sh (the eyes) + firmware/ (the hands)

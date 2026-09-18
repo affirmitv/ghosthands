@@ -15,7 +15,7 @@ def main():
     ap.add_argument("--goal"); ap.add_argument("--guide", default="")
     ap.add_argument("--run-dir", default=os.path.join(Config.runs_dir, "run"))
     ap.add_argument("--max-steps", type=int, default=80)
-    ap.add_argument("--hands", default=None, help="pico | dryrun | osascript")
+    ap.add_argument("--hands", default=None, help="pico | dryrun | cliclick")
     ap.add_argument("--planner", default=None, help="vision (screenshot LLM) | jev (Safari element table + Jev decisions)")
     a = ap.parse_args()
     if a.goal_file:

@@ -136,19 +136,24 @@ class JevDecider:
             try:
                 req = urllib.request.Request(self.url, data=json.dumps(body).encode(),
                                              headers=headers)
-                resp = json.load(urllib.request.urlopen(req, timeout=self.timeout))
+                raw = urllib.request.urlopen(req, timeout=self.timeout).read()
+                try:
+                    resp = json.loads(raw)
+                except ValueError as e:
+                    last = "non-JSON 2xx body (%s): %r" % (e, raw[:120])
+                    time.sleep(0.5 * (2 ** attempt))
+                    continue
                 self._validate(resp, questions)
                 usage = resp.get("usage") or {}
                 self.total_cost += float(usage.get("cost") or 0.0)
                 self.total_calls += 1
                 return resp
             except urllib.error.HTTPError as e:
-                err_body = ""
                 try:
                     err_body = e.read().decode("utf-8", "replace")
-                except Exception:
-                    pass
-                if 400 <= e.code < 500:
+                except OSError as read_err:
+                    err_body = "(error body unreadable: %s)" % read_err
+                if 400 <= e.code < 500 and e.code != 429:   # 429 is a rate limit: retry it
                     raise JevError("Jev HTTP %d: %s" % (e.code, err_body))
                 last = "HTTP %d %s" % (e.code, err_body)
             except (urllib.error.URLError, TimeoutError, OSError) as e:
@@ -207,6 +212,19 @@ class TextHelper:
         return raw.strip().strip('"').strip("'").strip()
 
 
+# Controls that commit money or mutate production. A click on one of these is never taken on
+# the model's word alone: the planner pauses so a human confirms the value on screen, and the
+# click is allowed only on the step right after that approval.
+_COMMIT_RE = re.compile(
+    r"\b(pay|purchase|buy|checkout|subscribe|confirm|activate|save|apply|update|submit|publish|"
+    r"approve|delete|remove|cancel plan|place order|charge)\b", re.I)
+
+
+def is_commit_control(label: str) -> bool:
+    """True when a control's label reads like a money or production commit."""
+    return bool(_COMMIT_RE.search(label or ""))
+
+
 class JevPlanner:
     """Drop-in replacement for brain.Planner, driven by Jev decisions."""
 
@@ -215,13 +233,16 @@ class JevPlanner:
     def __init__(self, reader: Optional[SafariReader] = None,
                  decider: Optional[JevDecider] = None,
                  text_helper: Optional[TextHelper] = None,
-                 min_confidence: Optional[float] = None) -> None:
+                 min_confidence: Optional[float] = None,
+                 min_target_confidence: Optional[float] = None) -> None:
         self.reader = reader or SafariReader()
         self.decider = decider or JevDecider()
         self.text_helper = text_helper or TextHelper()
         self.min_confidence = Config.jev_min_confidence if min_confidence is None else min_confidence
+        self.min_target_confidence = (Config.jev_min_target_confidence if min_target_confidence is None
+                                      else min_target_confidence)
         self.last_screen: Optional[Screen] = None
-        self.settle_timeout = 2.0   # seconds to wait for the page to change after an action
+        self.settle_timeout = Config.jev_settle_s  # seconds to wait for the page to change after an action
         self.settle_poll = 0.15
 
     def decide(self, goal: str, guide: str, frame_path: str, history: list[str],
@@ -240,7 +261,11 @@ class JevPlanner:
 
         target_ans = answers.get("click_target") if operation == "CLICK" else \
             answers.get("type_target") if operation == "TYPE_TEXT" else None
-        tgt_p = float(target_ans.get("confidence") or 0.0) if target_ans else 1.0
+        tgt_p = 1.0
+        if target_ans:
+            tgt_p = float(target_ans.get("confidence") or 0.0)
+            if not tgt_p:
+                tgt_p = float((target_ans.get("probabilities") or {}).get(target_ans.get("choice")) or 0.0)
 
         plan: dict = {}
         if operation in ("CLICK", "TYPE_TEXT"):
@@ -272,10 +297,15 @@ class JevPlanner:
             raise JevError("unknown operation %r" % operation)
 
         if operation not in ("WAIT", "SCROLL_DOWN", "SCROLL_UP") and \
-                (op_p < self.min_confidence or tgt_p < self.min_confidence):
+                (op_p < self.min_confidence or tgt_p < self.min_target_confidence):
             plan = {"action": "verify_stop",
                     "reason": "low confidence %s p=%s target p=%s"
                               % (operation, round(op_p, 2), round(tgt_p, 2))}
+        elif operation == "CLICK" and is_commit_control(plan.get("target", "")) and \
+                not (history and history[-1].startswith("[human")):
+            plan = {"action": "verify_stop",
+                    "reason": "commit control %s: confirm the value on screen, then CONTINUE"
+                              % plan.get("target", "")}
 
         plan["observation"] = "%d controls on '%s'" % (len(screen.elements), screen.title)
         plan["observation"] = plan["observation"][:160]
@@ -290,7 +320,9 @@ class JevPlanner:
     def _settled_snapshot(self, history: list[str]) -> tuple[Screen, float]:
         """Read the element table; after an action, keep re-reading (cheap, ~0.1 s) until the
         page differs from the table that action was planned on, or the settle timeout passes.
-        Mirrors jev-ultrafast's "wait for useful state" so a click is never planned on a stale table."""
+        Mirrors jev-ultrafast's "wait for useful state": the next decision is not made on the
+        table the last action has just invalidated. (A page can still move during the ~0.4 s
+        decision call; the hands click the point that was true when the table was read.)"""
         screen = self.reader.snapshot()
         prev = self.last_screen
         acted = bool(history) and not history[-1].startswith("[human")
@@ -301,6 +333,16 @@ class JevPlanner:
         while screen.fingerprint() == before and time.time() - t0 < self.settle_timeout:
             time.sleep(self.settle_poll)
             screen = self.reader.snapshot()
+        # Then require the table to hold still: two reads 0.25 s apart with the same
+        # positions. A smooth scroll or a slide-in panel otherwise hands out coordinates
+        # that are already wrong by the time the hands arrive.
+        t1 = time.time()
+        while time.time() - t1 < 1.5:
+            time.sleep(0.25)
+            again = self.reader.snapshot()
+            if again.fingerprint() == screen.fingerprint():
+                break
+            screen = again
         return screen, time.time() - t0
 
     def _type_value(self, goal: str, guide: str, screen: Screen, el: Element,
@@ -316,6 +358,10 @@ class JevPlanner:
                                 "instructions": {"goal": goal,
                                                  "task": "Pick the exact literal text to type into the field."}}}
             ans = self.decider.ask(state, q)["answers"]["text_value"]
-            if ans["choice"] != "__WRITE__":
+            p = float(ans.get("confidence") or (ans.get("probabilities") or {}).get(ans["choice"]) or 0.0)
+            if ans["choice"] != "__WRITE__" and p >= self.min_target_confidence:
                 return ans["choice"]
-        return self.text_helper.write(goal, guide, screen, el, history)
+        value = self.text_helper.write(goal, guide, screen, el, history)
+        if not value or len(value) > 200 or "\n" in value:
+            raise JevError("text helper returned an unusable value: %r" % value[:80])
+        return value

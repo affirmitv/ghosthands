@@ -21,7 +21,9 @@ SNAPSHOT_JS = r"""(() => {
   const vis = el => {
     const r = el.getBoundingClientRect();
     if (r.width <= 2 || r.height <= 2) return null;
-    if (r.bottom < 0 || r.right < 0 || r.top > vh || r.left > vw) return null;
+    // The CENTER must be on screen: that is the point the hands will click.
+    const cx0 = r.left + r.width / 2, cy0 = r.top + r.height / 2;
+    if (cx0 < 0 || cy0 < 0 || cx0 > vw || cy0 > vh) return null;
     const cs = getComputedStyle(el);
     if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity <= 0) return null;
     if (el.disabled) return null;
@@ -66,20 +68,51 @@ SNAPSHOT_JS = r"""(() => {
   };
   const val = el => {
     const t = el.tagName;
+    // ARIA state first: which tab is selected, which switch is on, which row is expanded.
+    for (const [attr, word] of [['aria-selected', 'selected'], ['aria-checked', 'checked'],
+                                ['aria-pressed', 'pressed'], ['aria-expanded', 'expanded']]) {
+      const v = el.getAttribute(attr);
+      if (v === 'true') return word;
+      if (v === 'false') return 'not ' + word;
+    }
+    if (el.classList && /(^|\s)(active|selected|is-active|is-selected)(\s|$)/.test(el.className || '')) return 'selected';
     if (t === 'INPUT' && /^(checkbox|radio)$/i.test(el.type || '')) return el.checked ? 'checked' : 'unchecked';
     if (t === 'SELECT') { const o = el.selectedOptions && el.selectedOptions[0]; return txt(o ? o.textContent : '').slice(0, 60); }
-    if (t === 'INPUT' || t === 'TEXTAREA') return txt(el.value).slice(0, 60);
+    if (t === 'INPUT' || t === 'TEXTAREA') {
+      // Never ship secrets to the decision model: passwords, card fields, tokens.
+      const ty = (el.type || '').toLowerCase(), ac = (el.getAttribute('autocomplete') || '').toLowerCase();
+      const nm = ((el.name || '') + ' ' + (el.id || '') + ' ' + (el.getAttribute('aria-label') || '')).toLowerCase();
+      if (ty === 'password' || /^cc-|one-time-code|new-password|current-password/.test(ac) ||
+          /pass|passwd|pwd|card|cvv|cvc|token|secret|ssn|otp|pin\b/.test(nm)) {
+        return el.value ? '(filled, hidden)' : '';
+      }
+      return txt(el.value).slice(0, 60);
+    }
     return '';
   };
-  const seen = [], out = [];
-  document.querySelectorAll(SEL).forEach(el => {
-    const r = vis(el);
-    if (!r) return;
+  const seen = [], out = [], taken = [];
+  const push = (el, r, forcedRole) => {
     if (seen.some(s => Math.abs(s[0] - r.top) < 2 && Math.abs(s[1] - r.left) < 2)) return;
-    seen.push([r.top, r.left]);
-    out.push({label: name(el), role: role(el), value: val(el),
+    seen.push([r.top, r.left]); taken.push(el);
+    out.push({label: name(el), role: forcedRole || role(el), value: val(el),
       x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height)});
-  });
+  };
+  document.querySelectorAll(SEL).forEach(el => { const r = vis(el); if (r) push(el, r); });
+  // Legacy sites (Angular Material lists, table rows with handlers) make plain divs/rows
+  // clickable with no role, href or onclick. The only tell is the pointer cursor. Take the
+  // outermost such element that is not inside a control we already have and has short text.
+  const all = document.body ? document.body.querySelectorAll('div,li,tr,td,span,p,section,article,mat-row,mat-list-item,mat-card') : [];
+  for (let i = 0; i < all.length && out.length < 80; i++) {
+    const el = all[i];
+    if (getComputedStyle(el).cursor !== 'pointer') continue;
+    if (taken.some(t => t === el || t.contains(el) || el.contains(t))) continue;
+    if (el.parentElement && el.parentElement.closest && getComputedStyle(el.parentElement).cursor === 'pointer') continue;
+    const r = vis(el);
+    if (!r || r.height > 160) continue;
+    const label = txt(el.innerText || el.textContent);
+    if (!label || label.length > 120) continue;
+    push(el, r, 'row');
+  }
   out.sort((a, b) => a.y - b.y || a.x - b.x);
   out.length = Math.min(out.length, 80);
   return JSON.stringify({
@@ -210,6 +243,7 @@ class Screen:
     def fingerprint(self) -> str:
         h = hashlib.sha1()
         h.update(self.url.encode("utf-8", "replace"))
+        h.update(self.text.encode("utf-8", "replace"))  # a schedule table has no controls but changes the text
         for e in sorted(self.elements, key=lambda e: e.index):
             row = "%s|%s|%s|%d|%d" % (e.label, e.role, e.value, round(e.x), round(e.y))
             h.update(row.encode("utf-8", "replace"))
