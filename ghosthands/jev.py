@@ -265,7 +265,7 @@ class JevPlanner:
         self.last_screen: Optional[Screen] = None
         self._pending_commit: Optional[tuple] = None  # (url, control) a human is being asked to approve
         self.settle_timeout = Config.jev_settle_s  # seconds to wait for the page to change after an action
-        self.settle_poll = 0.15
+        self.settle_poll = 0.1
 
     def decide(self, goal: str, guide: str, frame_path: str, history: list[str],
                dims: tuple[int, int]) -> tuple[dict, str]:
@@ -388,12 +388,12 @@ class JevPlanner:
                 time.time() - t0 < self.settle_timeout:
             time.sleep(self.settle_poll)
             screen = self.reader.snapshot()
-        # Then require the table to hold still: two reads 0.25 s apart with the same
+        # Then require the table to hold still: two reads 0.2 s apart with the same
         # positions. A smooth scroll or a slide-in panel otherwise hands out coordinates
         # that are already wrong by the time the hands arrive.
         t1 = time.time()
-        while time.time() - t1 < 1.5:
-            time.sleep(0.25)
+        while time.time() - t1 < 0.8:
+            time.sleep(0.2)
             again = self.reader.snapshot()
             if again.fingerprint() == screen.fingerprint():
                 break

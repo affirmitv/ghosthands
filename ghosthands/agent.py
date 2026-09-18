@@ -108,7 +108,7 @@ class Agent:
         if a in ("click", "double_click"):
             desc = plan.get("target", "")
             frac = self._point(plan, frame, desc, dims)
-            self.hands.move(frac[0], frac[1]); time.sleep(0.18)
+            self.hands.move(frac[0], frac[1]); time.sleep(0.1)
             self.hands.click()
             if a == "double_click":
                 time.sleep(0.09); self.hands.click()
@@ -116,7 +116,7 @@ class Agent:
             if plan.get("point"):
                 # Jev planner: the field is already located; focus it, clear it, then type.
                 frac = self._point(plan, frame, plan.get("target", ""), dims)
-                self.hands.move(frac[0], frac[1]); time.sleep(0.18)
+                self.hands.move(frac[0], frac[1]); time.sleep(0.1)
                 self.hands.click(); time.sleep(0.15)
                 if plan.get("select_all"):
                     self.hands.key("cmd+a"); time.sleep(0.08)
@@ -125,7 +125,7 @@ class Agent:
             # Native <select>: open it, type the option (popup type-ahead), confirm with Return.
             # One sequence, because the open popup blocks the page until it closes.
             frac = self._point(plan, frame, plan.get("target", ""), dims)
-            self.hands.move(frac[0], frac[1]); time.sleep(0.18)
+            self.hands.move(frac[0], frac[1]); time.sleep(0.1)
             self.hands.click(); time.sleep(0.5)
             # Popup type-ahead: a Space would confirm the highlighted item, so type only the
             # option's first word (up to 8 characters), then Return.
