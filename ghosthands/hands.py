@@ -105,6 +105,56 @@ class DryRunHands(Hands):
         resolved = amount if isinstance(amount, dict) else {"amount": amount}
         print("  [dry] scroll %s" % resolved); return "dry"
 
+class OsascriptHands(Hands):
+    """Development hands for a Mac WITHOUT a Pico: real clicks and keystrokes through
+    macOS System Events (needs Accessibility permission for the terminal). Detectable by
+    the OS as synthetic input, so it is for testing the loop, not for the field."""
+    def __init__(self):
+        import subprocess
+        self._run = lambda script: subprocess.run(["osascript", "-e", script], check=True,
+                                                  capture_output=True, text=True, timeout=20)
+        self._pos = (0.5, 0.5)
+        out = subprocess.run(["osascript", "-e",
+            'tell application "Safari" to do JavaScript "screen.width + \",\" + screen.height" in current tab of front window'],
+            capture_output=True, text=True, timeout=20).stdout.strip()
+        w, h = (out.split(",") + ["0", "0"])[:2]
+        self._screen = (int(float(w or 0)) or 1440, int(float(h or 0)) or 900)
+    def _xy(self):
+        return int(self._pos[0] * self._screen[0]), int(self._pos[1] * self._screen[1])
+    def move(self, x01, y01):
+        self._pos = (min(1.0, max(0.0, x01)), min(1.0, max(0.0, y01))); return "ok"
+    def click(self, button="left"):
+        x, y = self._xy()
+        self._run('tell application "System Events" to click at {%d, %d}' % (x, y)); return "ok"
+    def type(self, text):
+        esc = text.replace("\\", "\\\\").replace('"', '\\"')
+        self._run('tell application "System Events" to keystroke "%s"' % esc); return "ok"
+    def key(self, keys):
+        parts = [p.strip().lower() for p in keys.split("+") if p.strip()]
+        mods = {"cmd": "command down", "command": "command down", "shift": "shift down",
+                "alt": "option down", "option": "option down", "ctrl": "control down"}
+        codes = {"return": 36, "enter": 36, "tab": 48, "escape": 53, "esc": 53, "space": 49,
+                 "delete": 51, "backspace": 51, "up": 126, "down": 125, "left": 123, "right": 124}
+        using = [mods[p] for p in parts if p in mods]
+        main = [p for p in parts if p not in mods][-1:]
+        if not main:
+            return "ok"
+        suffix = (" using {%s}" % ", ".join(using)) if using else ""
+        if main[0] in codes:
+            self._run('tell application "System Events" to key code %d%s' % (codes[main[0]], suffix))
+        else:
+            self._run('tell application "System Events" to keystroke "%s"%s' % (main[0], suffix))
+        return "ok"
+    def scroll(self, amount):
+        # System Events has no wheel event; fall back to Safari's own scroll for dev runs.
+        self._run('tell application "Safari" to do JavaScript "window.scrollBy(0, %d)" in current tab of front window'
+                  % (int(amount) * 120))
+        return "ok"
+
 def make_hands(backend=None):
     backend = backend or Config.hands_backend
-    return DryRunHands() if backend == "dryrun" else PicoHands()
+    if backend == "dryrun":
+        return DryRunHands()
+    if backend == "osascript":
+        return OsascriptHands()
+    return PicoHands()

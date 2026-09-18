@@ -9,13 +9,15 @@ It is three cheap parts:
 
 | Part | Role | Default |
 |------|------|---------|
-| 🧠 **Brain** | a small *vision* LLM that sees the screen and picks the next action | `z-ai/glm-5.3-flash` |
+| 🧠 **Brain (fast lane)** | **Jev**, TypeSafe's decision model: reads an indexed table of the controls on screen and answers "which operation, which element" with calibrated probabilities in ~300 ms | `typesafe/jev-1.13` |
+| 🧠 **Brain (vision lane)** | a small *vision* LLM that sees a screenshot and picks the next action; used where no element table exists (native apps, games, BIOS) | `z-ai/glm-5.3-flash` |
 | 👁️ **Eyes** | a GUI *grounding* model that turns "click the blue Create button" into an (x, y) | `bytedance/ui-tars-1.5-7b` |
 | ✋ **Hands** | a $4 Raspberry Pi Pico flashed as a USB-HID mouse+keyboard | Pico over serial |
 
-Both models run over any OpenAI-compatible endpoint (OpenRouter by default). A full step —
-screenshot → decide → locate → click — costs roughly **$0.0002**. The expensive frontier model
-that *orchestrated* the task is out of the loop; the loop runs on nickels.
+All of it runs over OpenRouter by default (Jev through OpenRouter's decisions endpoint, the LLMs
+through chat completions). On the fast lane a step is one Jev call: about **$0.0001 and 0.4 s**,
+no screenshot and no grounding call, because the element table already carries coordinates. The
+expensive frontier model that *orchestrated* the task is out of the loop; the loop runs on pennies.
 
 ## Why real HID instead of software automation
 
@@ -40,10 +42,84 @@ bash scripts/screenfeed.sh
 # 3) Prove the hands work (no LLM):
 python3 examples/trace_square.py
 
-# 4) Run a task:
+# 4) Run a task on the vision lane (any app):
 python3 run.py --goal "Open TextEdit and type hello" \
                --guide "Use Spotlight (cmd+space) to open TextEdit, then type."
+
+# 5) Run a task on the Jev fast lane (Safari; enable Develop > Allow JavaScript from Apple Events):
+python3 run.py --planner jev \
+               --goal "Open the schedule for the Oakland 14U Duckett team in this tournament." \
+               --guide "Open the TEAMS tab, click the team, DONE when its games are listed."
+# No Pico yet? --hands osascript clicks through macOS System Events so you can watch the loop.
 ```
+
+## The Jev fast lane
+
+[browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast) showed the shape:
+every observation becomes a **numbered element table**, and one request to
+[TypeSafe's Jev](https://docs.typesafe.ai/introduction) answers the operation and the target at
+once, with probabilities. ghosthands borrows that loop and keeps its own hands. Where
+jev-ultrafast executes inside Chrome through the DevTools protocol, ghosthands reads the table
+from Safari through the AppleScript JavaScript bridge (the page never sees a WebDriver) and
+executes with a real USB mouse and keyboard.
+
+```
+  Safari front tab ──▶ dom_reader: [1] tab SCHEDULE · [2] tab TEAMS · [3] textbox Search …
+                                     │  labels, roles, values, screen coordinates
+                                     ▼
+                       ONE Jev request:  operation? click_target? type_target?
+                                     │  {"CLICK": 0.72, "SCROLL_DOWN": 0.16, …}
+                                     ▼
+              CLICK [2] ──▶ HANDS move to the element's center ──▶ click
+              TYPE_TEXT [3] ──▶ pick the literal from the playbook (Jev) or write it (small LLM)
+```
+
+Measured on 2026-09-18 through OpenRouter, one decision each, `usage.cost` as billed:
+
+| Decision | Model | Input tokens | Output tokens | Cost | Latency |
+|---|---|---|---|---|---|
+| Vision lane: one 1170x2532 screenshot + playbook | `z-ai/glm-5.3-flash` ($0.09/M in, $0.30/M out) | 5,506 | 336 | $0.00093 | 8.7 s |
+| Jev fast lane: 18-control tournament page + playbook | `typesafe/jev-1.13` ($0.042/M in, output free) | 2,387 | 223 | $0.00010 | 0.38 s |
+
+That is **9x cheaper and 23x faster per decision**, and the vision lane still needs a grounding
+call to turn "the SCHEDULE tab" into a pixel before it can click. The fast lane does not: the
+element table already knows where every control is. Reading the table takes 0.08 s.
+
+What Jev adds beyond speed:
+
+- **Calibrated probabilities.** Every answer comes with a distribution. `GH_JEV_MIN_CONFIDENCE`
+  (default 0.5) turns a low-confidence operation or target into a `verify_stop`, so the money
+  rules in [Safety](#safety) now have a number behind them instead of a prompt.
+- **Only real choices are offered.** If nothing on screen can be typed into, `TYPE_TEXT` is not on
+  the menu. If nothing is clickable, neither is `CLICK`.
+- **Text is separate from decisions.** Jev never writes prose. For `TYPE_TEXT` the planner first
+  asks Jev to pick among the literals already in the playbook (a product ID, a price, an email);
+  only when none fits does a small text model write the value.
+
+Configuration: `GH_PLANNER=jev`, `GH_JEV_MODEL` (default `typesafe/jev-1.13`; `~typesafe/jev-latest`
+tracks the newest), `GH_JEV_URL` (default OpenRouter's `/api/alpha/decisions`; point it at
+`https://api.typesafe.ai/v1/systemone` with a TypeSafe key to go direct), `GH_JEV_TEXT_MODEL`,
+`GH_JEV_MIN_CONFIDENCE`. The vision lane is unchanged and remains the default for anything that
+is not a Safari page.
+
+## Why this exists: Firmi and the systems with no API
+
+ghosthands is the hands behind [Firmi](https://firmi.ai), the agent that runs a youth sports
+club's app. Most of what a club depends on lives in systems that were never going to ship an API:
+tournament sites that publish brackets as HTML tables, App Store Connect and Google Play Console
+screens that only exist as web pages, league registration portals, gym scheduling pages. When a
+tournament director moves a game, Firmi has to notice and update every parent's app, and the
+only interface to that fact is a web page built for a person with a mouse.
+
+The vision lane made this possible. The Jev fast lane makes it routine: a decision that cost a
+tenth of a cent and most of ten seconds now costs a hundredth of a cent and a third of a second,
+which is the difference between checking a tournament site a few times a day and checking it
+every few minutes for every team in the club. Legacy integrations stop being a project and become
+a playbook.
+
+If you run an operation that depends on old-school systems, this is the loop that drives them
+like a person would, for pennies. Stars and issues welcome; the code is short enough to read in
+one sitting.
 
 ## How the loop works
 
@@ -85,10 +161,15 @@ the raw wheel direction and which way the page moves follows the host's scroll-d
 
 ```
 ghosthands/        core library  (config, eyes, hands, brain, agent)
-run.py             CLI
+  jev.py           Jev fast lane: JevDecider (decisions endpoint), JevPlanner (drop-in brain)
+  dom_reader.py    Safari element table with screen coordinates (no screenshot, no WebDriver)
+run.py             CLI  (--planner vision|jev, --hands pico|dryrun|osascript)
+tests/             offline unit tests  (python3 -m unittest discover tests)
 examples/          trace_square.py, streamon3_subscriptions.py
 scripts/           screenfeed.sh (the eyes) + firmware/ (the hands)
 docs/              HARDWARE.md, ARCHITECTURE.md
 ```
 
-MIT licensed. Built as the screen-driving component behind AppSpace's autonomous ops.
+MIT licensed. Built as the screen-driving component behind Firmi and AppSpace's autonomous ops.
+The Jev fast lane follows the design published by Browser Use in
+[jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (MIT).

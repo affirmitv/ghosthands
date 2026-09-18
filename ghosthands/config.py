@@ -20,6 +20,13 @@ class Config:
     planner_model  = os.environ.get("GH_PLANNER_MODEL", "z-ai/glm-5.3-flash")
     # Grounder = the "eyes->coords": a GUI grounding model that turns "click X" into a pixel.
     grounder_model = os.environ.get("GH_GROUNDER_MODEL", "bytedance/ui-tars-1.5-7b")
+    # Jev = TypeSafe's decision model (System One). Reads a structured element table, answers
+    # "which operation / which element" with calibrated probabilities in ~300 ms. Output tokens are free.
+    planner        = os.environ.get("GH_PLANNER", "vision")   # vision | jev
+    jev_url        = os.environ.get("GH_JEV_URL", "https://openrouter.ai/api/alpha/decisions")
+    jev_model      = os.environ.get("GH_JEV_MODEL", "typesafe/jev-1.13")
+    jev_text_model = os.environ.get("GH_JEV_TEXT_MODEL", "z-ai/glm-5.3-flash")  # writes TYPE_TEXT values only
+    jev_min_confidence = float(os.environ.get("GH_JEV_MIN_CONFIDENCE", "0.5"))  # below this -> verify_stop
     frame          = os.environ.get("GH_FRAME", "/tmp/gh_frame.jpg")
     trigger        = os.environ.get("GH_TRIGGER", "/tmp/gh_capture_now")
     pico_port      = os.environ.get("GH_PICO_PORT", "/dev/cu.usbmodem1101")
