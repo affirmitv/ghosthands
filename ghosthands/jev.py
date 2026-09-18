@@ -33,15 +33,16 @@ OPERATIONS: "OrderedDict[str, str]" = OrderedDict([
     ("SCROLL_DOWN", "Scroll the page down to reveal more"),
     ("SCROLL_UP", "Scroll the page up"),
     ("WAIT", "Wait for the page to finish loading or updating"),
-    ("VERIFY_STOP", "Pause for a human: money is about to be committed, a login/2FA/captcha wall, an error, or the page does not match the playbook"),
+    ("VERIFY_STOP", "Pause for a human: money is about to be committed, a login/2FA/captcha wall blocks the way, or an error message is on the page"),
     ("DONE", "The whole goal is achieved and visible on the page"),
 ])
 
 _RULES = (
     "never CLICK a button that commits a price/charge (Activate, Save, Apply, "
     "Confirm, Update, Pay) until a previous step read the value back and it "
-    "equals the target; on anything unexpected choose VERIFY_STOP; choose DONE "
-    "only when the goal is visible"
+    "equals the target; on a login wall, an error message or a money step choose VERIFY_STOP; "
+    "when the page is not what the playbook expected, navigate (BACK, another row, scroll) rather "
+    "than stop; choose DONE only when the goal is visible"
 )
 
 _KEY_RE = re.compile(r"^\s*(name|id|product id|email|password|title|url|price|plan|team|code)\s*:\s*(.+)$", re.I | re.M)

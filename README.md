@@ -87,11 +87,20 @@ That is **9x cheaper and 23x faster per decision**, and the vision lane still ne
 call to turn "the SCHEDULE tab" into a pixel before it can click. The fast lane does not: the
 element table already knows where every control is. Reading the table takes 0.08 s.
 
+Whole task, live, 2026-09-18 08:06 PT, real pointer, Safari on a Mac: "Show the games for the
+Lakeshow 14U Boyd team" on a Buzzer Beater Events tournament page (an Angular site whose team rows
+are plain divs with a pointer cursor, no links, no API). Nine decisions, **10 seconds wall clock,
+$0.0015 total**, mean decision latency 0.32 s: open TEAMS, scroll six times, click the team row,
+DONE at p=0.98 with the games on screen. The step log is in the pull request.
+
 What Jev adds beyond speed:
 
 - **Calibrated probabilities.** Every answer comes with a distribution. `GH_JEV_MIN_CONFIDENCE`
-  (default 0.5) turns a low-confidence operation or target into a `verify_stop`, so the money
-  rules in [Safety](#safety) now have a number behind them instead of a prompt.
+  (default 0.35) and `GH_JEV_MIN_TARGET_CONFIDENCE` (default 0.15) turn a noise-level operation or
+  target into a `verify_stop`. Money is gated deterministically: a click on a control whose label
+  reads Pay, Save, Activate, Confirm, Apply, Update, Submit, Delete (and friends) always pauses once
+  for a human, whatever the model's confidence. The money rules in [Safety](#safety) now have code
+  behind them instead of a prompt.
 - **Only real choices are offered.** If nothing on screen can be typed into, `TYPE_TEXT` is not on
   the menu. If nothing is clickable, neither is `CLICK`.
 - **Text is separate from decisions.** Jev never writes prose. For `TYPE_TEXT` the planner first
