@@ -33,13 +33,25 @@ class Agent:
         self._log("start", goal.strip().splitlines()[0][:100])
         for _ in range(max_steps):
             self.step += 1
-            frame = self.eyes.capture()
-            w, h = self.eyes.dims(frame)
-            shutil.copyfile(frame, os.path.join(self.run_dir, "step%03d.jpg" % self.step))
+            if getattr(self.planner, "needs_frame", True):
+                frame = self.eyes.capture()
+                w, h = self.eyes.dims(frame)
+                shutil.copyfile(frame, os.path.join(self.run_dir, "step%03d.jpg" % self.step))
+            else:
+                # Jev planner reads the element table straight from Safari: no screenshot, no eyes.
+                frame, (w, h) = None, (0, 0)
             try:
                 plan, raw = self.planner.decide(goal, guide, frame, self.history, (w, h))
             except Exception as e:
-                self._log("planner_error", str(e)); return "planner_error"
+                if not hasattr(self.planner, "recover"):
+                    self._log("planner_error", str(e)); return "planner_error"
+                # Jev lane only: a stuck popup or menu blocks the page reader; recover, retry once.
+                self._log("planner_retry", str(e)[:200])
+                try:
+                    self.planner.recover(self.hands)
+                    plan, raw = self.planner.decide(goal, guide, frame, self.history, (w, h))
+                except Exception as e2:
+                    self._log("planner_error", str(e2)[:300]); return "planner_error"
             act = plan.get("action", "")
             self._log("plan", "%s | %s" % (act, (plan.get("observation") or "")[:90]),
                       {"plan": plan})
@@ -78,19 +90,48 @@ class Agent:
         d = plan.get("target") or plan.get("text") or plan.get("keys") or plan.get("url") or ""
         return ("%s: %s" % (a, d))[:130]
 
+    def _point(self, plan, frame, desc, dims):
+        """Screen point as (fx, fy) fractions. A plan that already carries a `point`
+        (Jev + Safari DOM reader) skips the grounding model entirely."""
+        pt = plan.get("point")
+        if pt:
+            fx, fy = float(pt[0]), float(pt[1])
+            self._log("point", "%s -> (%.3f,%.3f) from element table" % (desc[:50], fx, fy))
+            return (fx, fy)
+        x, y, frac, raw = self.grounder.locate(frame, desc, dims)
+        self._log("ground", "%s -> %d,%d (%.3f,%.3f)" % (desc[:50], x, y, frac[0], frac[1]))
+        return frac
+
     def _execute(self, plan, dims, frame):
         w, h = dims
         a = plan.get("action", "")
         if a in ("click", "double_click"):
             desc = plan.get("target", "")
-            x, y, frac, raw = self.grounder.locate(frame, desc, dims)
-            self._log("ground", "%s -> %d,%d (%.3f,%.3f)" % (desc[:50], x, y, frac[0], frac[1]))
+            frac = self._point(plan, frame, desc, dims)
             self.hands.move(frac[0], frac[1]); time.sleep(0.18)
             self.hands.click()
             if a == "double_click":
                 time.sleep(0.09); self.hands.click()
         elif a == "type":
+            if plan.get("point"):
+                # Jev planner: the field is already located; focus it, clear it, then type.
+                frac = self._point(plan, frame, plan.get("target", ""), dims)
+                self.hands.move(frac[0], frac[1]); time.sleep(0.18)
+                self.hands.click(); time.sleep(0.15)
+                if plan.get("select_all"):
+                    self.hands.key("cmd+a"); time.sleep(0.08)
             self.hands.type(plan.get("text", ""))
+        elif a == "select":
+            # Native <select>: open it, type the option (popup type-ahead), confirm with Return.
+            # One sequence, because the open popup blocks the page until it closes.
+            frac = self._point(plan, frame, plan.get("target", ""), dims)
+            self.hands.move(frac[0], frac[1]); time.sleep(0.18)
+            self.hands.click(); time.sleep(0.5)
+            # Popup type-ahead: a Space would confirm the highlighted item, so type only the
+            # option's first word (up to 8 characters), then Return.
+            prefix = (plan.get("text", "").split(" ")[0])[:8]
+            self.hands.type(prefix); time.sleep(0.3)
+            self.hands.key("return"); time.sleep(0.3)
         elif a == "key":
             self.hands.key(plan.get("keys", ""))
         elif a == "scroll":

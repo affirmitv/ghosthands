@@ -20,6 +20,22 @@ class Config:
     planner_model  = os.environ.get("GH_PLANNER_MODEL", "z-ai/glm-5.3-flash")
     # Grounder = the "eyes->coords": a GUI grounding model that turns "click X" into a pixel.
     grounder_model = os.environ.get("GH_GROUNDER_MODEL", "bytedance/ui-tars-1.5-7b")
+    # Jev = TypeSafe's decision model (System One). Reads a structured element table, answers
+    # "which operation / which element" with calibrated probabilities in ~300 ms. Output tokens are free.
+    planner        = os.environ.get("GH_PLANNER", "vision")   # vision | jev
+    jev_url        = os.environ.get("GH_JEV_URL", "https://openrouter.ai/api/alpha/decisions")
+    jev_model      = os.environ.get("GH_JEV_MODEL", "typesafe/jev-1.13")
+    jev_text_model = os.environ.get("GH_JEV_TEXT_MODEL", "z-ai/glm-5.3-flash")  # writes TYPE_TEXT values only
+    # Operation gate. Jev's top operation on an exploratory page (scroll or click, both fine)
+    # often sits near 0.45; this catches noise, not ambiguity. Money is gated by label.
+    jev_min_confidence = float(os.environ.get("GH_JEV_MIN_CONFIDENCE", "0.35"))  # operation below this -> verify_stop
+    # A target is one pick among many controls, and several are often equally right (three 14u
+    # division rows when the playbook says "open a 14u division"). The gate only catches a pick
+    # that is noise; money and production commits are gated separately by label (jev.is_commit_control).
+    jev_min_target_confidence = float(os.environ.get("GH_JEV_MIN_TARGET_CONFIDENCE", "0.15"))
+    # After an action the planner re-reads the table (0.1 s each) until the page changes or this
+    # many seconds pass. Legacy sites fetch a tab's content over the network; give them time.
+    jev_settle_s   = float(os.environ.get("GH_JEV_SETTLE_S", "6.0"))
     frame          = os.environ.get("GH_FRAME", "/tmp/gh_frame.jpg")
     trigger        = os.environ.get("GH_TRIGGER", "/tmp/gh_capture_now")
     pico_port      = os.environ.get("GH_PICO_PORT", "/dev/cu.usbmodem1101")

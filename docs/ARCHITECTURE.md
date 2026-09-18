@@ -23,3 +23,20 @@ to history → repeat, with per-step screenshots, a jsonl log, and money checkpo
   address bar — it is far more reliable than HID-typing a URL.
 - Long `type` strings are chunked to ≤18 chars; the HID stack drops characters on long bursts.
 - Keyboard `pagedown`/arrows often scroll where a synthetic wheel event is ignored.
+
+## Jev fast lane (2026-09)
+
+A second brain sits beside the vision planner. `ghosthands/dom_reader.py` reads the front Safari
+tab through the AppleScript `do JavaScript` bridge and returns an indexed table of visible
+controls (label, role, value, viewport rect, window position, screen size). `Element.screen_point`
+turns a rect into screen fractions the hands already understand, so no grounding call is needed.
+`ghosthands/jev.py` posts that table as `state` to TypeSafe's Jev decision model (OpenRouter
+`/api/alpha/decisions`, model `typesafe/jev-1.13`) with three choice questions: `operation`,
+`click_target`, `type_target`. Only operations with a live target are offered. Answers carry
+probabilities; `JevPlanner` maps them to the same plan dicts the vision `Planner` emits, adds a
+`point`, and downgrades any low-confidence step to `verify_stop`. `Agent._point` prefers a plan's
+`point` over the grounder, and the agent skips the screenshot when the planner sets
+`needs_frame = False`. `TYPE_TEXT` values come from the playbook's own literals (Jev picks one) or,
+failing that, from a small text model. The design follows browser-use/jev-ultrafast; the execution
+stays on real HID.
+
