@@ -85,8 +85,18 @@ class Planner:
                 ("\n\nThe screenshot is %dx%d px. Decide the SINGLE next action as JSON." % (w, h)))
         msgs = [{"role": "system", "content": PLANNER_SYSTEM},
                 {"role": "user", "content": [{"type": "text", "text": text}, _img(frame_path)]}]
-        raw = _chat(self.model, msgs, max_tokens=500)
-        return _parse_json(raw), raw
+        # Reasoning models sometimes truncate the JSON (reasoning tokens eat the
+        # budget) or emit prose around it; retry a few times instead of failing.
+        last_err = None
+        for attempt in range(3):
+            raw = _chat(self.model, msgs, max_tokens=1200,
+                        temperature=0.15 * attempt)
+            try:
+                return _parse_json(raw), raw
+            except Exception as e:
+                last_err = e
+        raise RuntimeError("planner returned unparseable JSON after retries: %s; last raw: %.200r"
+                           % (last_err, raw))
 
 class Grounder:
     def __init__(self, model=None):
