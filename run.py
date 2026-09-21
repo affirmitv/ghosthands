@@ -50,7 +50,7 @@ def main():
             try:
                 rfb = open_session()
                 break
-            except RFBError as e:
+            except (RFBError, OSError) as e:
                 # The experimental VNC server cycles its endpoint when tart
                 # restarts; refresh it and retry instead of dying on launch.
                 print("vnc connect failed (%s); refreshing endpoint via tart-vm-up" % e)
