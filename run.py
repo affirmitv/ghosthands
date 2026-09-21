@@ -43,8 +43,33 @@ def main():
         # the guest's Safari -- the host screen is never touched.
         # One persistent RFB session for the whole run: tart's _VZVNCServer has
         # crashed under connection churn, so hands, eyes and navigation share it.
-        from ghosthands.vnc import VNCEyes, VNCHands, open_session, vnc_navigate
-        rfb = open_session()
+        from ghosthands.vnc import VNCEyes, VNCHands, open_session, vnc_navigate, RFBError
+        import subprocess as _sp
+        rfb = None
+        for _attempt in range(3):
+            try:
+                rfb = open_session()
+                break
+            except RFBError as e:
+                # The experimental VNC server cycles its endpoint when tart
+                # restarts; refresh it and retry instead of dying on launch.
+                print("vnc connect failed (%s); refreshing endpoint via tart-vm-up" % e)
+                _sp.run([os.path.expanduser("~/Development/ghosthands/bin/tart-vm-up")],
+                        capture_output=True, timeout=180)
+                # re-read the refreshed endpoint into the env open_session uses
+                _env = {}
+                try:
+                    with open(os.path.expanduser("~/.config/ghosthands/tart-vnc-current.env")) as f:
+                        for _line in f:
+                            _line = _line.strip()
+                            if _line.startswith("VNC_HOST="):
+                                os.environ["GH_VNC_HOST"] = _line.split("=", 1)[1]
+                            elif _line.startswith("VNC_PORT="):
+                                os.environ["GH_VNC_PORT"] = _line.split("=", 1)[1]
+                except OSError:
+                    pass
+        if rfb is None:
+            raise RuntimeError("could not establish VNC session after 3 attempts")
         agent = Agent(planner, Grounder(), VNCHands(rfb=rfb), eyes=VNCEyes(rfb=rfb),
                       run_dir=a.run_dir,
                       navigate_fn=lambda url: vnc_navigate(url, rfb=rfb))
