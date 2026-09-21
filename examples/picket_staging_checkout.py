@@ -21,9 +21,16 @@ http://192.168.64.1:8000/
 CHECKOUT FLOW:
  1. On the storefront, find the "Fresh Herb Bundle" product ($5) and add it to the cart.
  2. Go to the cart / checkout.
- 3. Choose the "Greater Baltimore" delivery option ($10 delivery fee).
- 4. Enter delivery ZIP code: 21210
- 5. At payment, use these Stripe PUBLIC TEST values (from Stripe's own docs;
+ 3. INFORMATION step: fill the contact form top to bottom with these TEST values:
+      Full Name: "Test Buyer"
+      Email: "test@example.com"
+      Phone: "4105551234"
+    Uncheck the newsletter checkbox if it is checked. Then click CONTINUE.
+    (If a field is below the fold, scroll down to reach it.)
+ 4. FULFILLMENT step: choose the "Greater Baltimore" delivery option ($10 fee),
+    enter delivery ZIP code 21210, and choose a delivery date at least 2 days
+    in the future (never a past date). Then continue.
+ 5. PAYMENT step: use these Stripe PUBLIC TEST values (from Stripe's own docs;
     no real money moves, nothing secret):
       number: "4242 4242 4242 4242"
       expiry: "12/28"
@@ -32,7 +39,6 @@ CHECKOUT FLOW:
     click its top area, type the number, then type the expiry, then type the
     code — the form advances between fields on its own. Do not re-click the
     frame between the three values.
- 6. Choose a delivery date at least 2 days in the future (never a past date).
  6. Place the order.
  7. VERIFY on the confirmation page: order total must be $15.30
     (subtotal $5 + delivery $10 + fees/tax = $15.30).
