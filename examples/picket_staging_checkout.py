@@ -19,7 +19,12 @@ Direct URL (use action 'navigate'):
 http://192.168.64.1:8000/
 
 CHECKOUT FLOW:
- 1. On the storefront, find the "Fresh Herb Bundle" product ($5) and add it to the cart.
+ 1. STAY ON THE HOME PAGE. In the "What's Fresh This Week" section, find the
+    "Fresh Herb Bundle" product card ($5.00) and click its "Add to Cart" button.
+    Do NOT click category links (Farm Fresh, etc.) — the product is on the home page.
+    If the product card is below the fold, scroll down to reach it.
+    If you click the same link twice without the page changing, stop clicking it
+    and try a different control.
  2. Go to the cart / checkout.
  3. INFORMATION step: fill the contact form top to bottom with these TEST values:
       Full Name: "Test Buyer"
