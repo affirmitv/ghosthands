@@ -27,8 +27,17 @@ def main():
     if not Config.api_key:
         print("no OPENROUTER_API_KEY (env or ~/.config/ghosthands/openrouter.env)"); sys.exit(2)
     planner_kind = a.planner or Config.planner
-    planner = JevPlanner() if planner_kind == "jev" else Planner()
     backend = a.hands or Config.hands_backend
+    if planner_kind == "jev":
+        if backend == "vnc":
+            # Jev over VNC: the element table is read from the guest's Safari
+            # (SSH + AppleScript bridge), not the host's. Pixels never involved.
+            from ghosthands.guest_reader import GuestSafariReader
+            planner = JevPlanner(reader=GuestSafariReader())
+        else:
+            planner = JevPlanner()
+    else:
+        planner = Planner()
     if backend == "vnc":
         # VNC run: eyes read the guest framebuffer over RFB and navigation drives
         # the guest's Safari -- the host screen is never touched.

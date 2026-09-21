@@ -23,10 +23,16 @@ CHECKOUT FLOW:
  2. Go to the cart / checkout.
  3. Choose the "Greater Baltimore" delivery option ($10 delivery fee).
  4. Enter delivery ZIP code: 21210
- 5. At payment, use the Stripe TEST card (public test data, not real):
-      card number: 4242 4242 4242 4242
-      expiry: 12/28
-      CVC: 123
+ 5. At payment, use these Stripe PUBLIC TEST values (from Stripe's own docs;
+    no real money moves, nothing secret):
+      number: "4242 4242 4242 4242"
+      expiry: "12/28"
+      code: "123"
+    The payment form is a single secure frame holding all three fields:
+    click its top area, type the number, then type the expiry, then type the
+    code — the form advances between fields on its own. Do not re-click the
+    frame between the three values.
+ 6. Choose a delivery date at least 2 days in the future (never a past date).
  6. Place the order.
  7. VERIFY on the confirmation page: order total must be $15.30
     (subtotal $5 + delivery $10 + fees/tax = $15.30).

@@ -120,6 +120,24 @@ SNAPSHOT_JS = r"""(() => {
   }
   out.sort((a, b) => a.y - b.y || a.x - b.x);
   out.length = Math.min(out.length, 80);
+  // Payment iframes (Stripe Elements / PaymentElement) are cross-origin: their
+  // inner fields are invisible to the DOM, but the iframe rect itself is a
+  // real click target. Clicking it focuses the first field (card number) and
+  // keystrokes go there, so expose each visible iframe as a frame element.
+  document.querySelectorAll('iframe').forEach(el => {
+    const r = vis(el);
+    if (!r || r.height > 620) return;
+    const label = txt(el.getAttribute('title')) || txt(el.getAttribute('name')) ||
+                  txt(el.getAttribute('id')) || txt(el.getAttribute('aria-label')) ||
+                  'payment frame';
+    if (seen.some(s => Math.abs(s[0] - r.top) < 2 && Math.abs(s[1] - r.left) < 2)) return;
+    seen.push([r.top, r.left]); taken.push(el);
+    out.push({label: label, role: 'frame', value: '',
+      x: Math.round(r.left), y: Math.round(r.top),
+      w: Math.round(r.width), h: Math.round(r.height)});
+  });
+  out.sort((a, b) => a.y - b.y || a.x - b.x);
+  out.length = Math.min(out.length, 80);
   return JSON.stringify({
     title: document.title, url: location.href,
     text: txt(document.body ? document.body.innerText : '').slice(0, 1500),
@@ -212,6 +230,11 @@ class Element:
             # is driven as one keyboard sequence (click, type the option, Return), never clicked bare.
             return ["SELECT"]
         if self.role in ("textbox", "combobox", "searchbox"):
+            return ["TYPE_TEXT", "CLICK"]
+        if self.role == "frame":
+            # Cross-origin payment iframe (Stripe Elements): the inner fields are
+            # invisible, but clicking the frame focuses the first field and typing
+            # goes there (Stripe auto-advances between its fields).
             return ["TYPE_TEXT", "CLICK"]
         return ["CLICK"]
 

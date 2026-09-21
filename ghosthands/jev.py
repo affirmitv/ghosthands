@@ -246,6 +246,19 @@ def is_commit_control(label: str) -> bool:
     return bool(_COMMIT_RE.search(label or ""))
 
 
+def _frame_top_point(el, viewport: dict, screen: tuple[int, int]) -> tuple[float, float]:
+    """Click point for a payment iframe: the card-number field sits at the top
+    of the frame, so aim a quarter of the way down instead of the center."""
+    chrome = viewport.get("oh", viewport["h"]) - viewport["h"]
+    sx = viewport.get("sx", 0) + el.x + el.w / 2.0
+    sy = viewport.get("sy", 0) + chrome + el.y + el.h * 0.22
+    fx, fy = sx / max(1, screen[0]), sy / max(1, screen[1])
+    if not (0.0 <= fx <= 1.0 and 0.0 <= fy <= 1.0):
+        raise ValueError("frame %s top point (%.0f, %.0f) is outside the main display %sx%s"
+                         % (el.index, sx, sy, screen[0], screen[1]))
+    return (fx, fy)
+
+
 class JevPlanner:
     """Drop-in replacement for brain.Planner, driven by Jev decisions."""
 
@@ -264,6 +277,7 @@ class JevPlanner:
                                       else min_target_confidence)
         self.last_screen: Optional[Screen] = None
         self._pending_commit: Optional[tuple] = None  # (url, control) a human is being asked to approve
+        self._last_type_target: Optional[str] = None  # element index, for frame type chaining
         self.settle_timeout = Config.jev_settle_s  # seconds to wait for the page to change after an action
         self.settle_poll = 0.15
 
@@ -293,7 +307,10 @@ class JevPlanner:
         if operation in ("CLICK", "TYPE_TEXT", "SELECT"):
             el = screen.by_index(target_ans["choice"])
             try:
-                fx, fy = el.screen_point(screen.viewport, screen.screen)
+                if el.role == "frame" and operation in ("CLICK", "TYPE_TEXT"):
+                    fx, fy = _frame_top_point(el, screen.viewport, screen.screen)
+                else:
+                    fx, fy = el.screen_point(screen.viewport, screen.screen)
             except ValueError as e:
                 return ({"action": "verify_stop", "reason": str(e),
                          "observation": "control off the main display", "reasoning": "jev %s" % operation},
@@ -305,8 +322,19 @@ class JevPlanner:
             if operation == "TYPE_TEXT":
                 plan["text"] = self._type_value(goal, guide, screen, el, res, history)
                 plan["select_all"] = True
+                if el.role == "frame" and self._last_type_target == el.index:
+                    # Consecutive types into the same payment frame: Stripe
+                    # auto-advances between its fields, so the next field is
+                    # already focused — re-clicking would refocus the first one.
+                    # (The frame's inner values are invisible, so select-all is
+                    # skipped too; just type.)
+                    plan["no_focus_click"] = True
+                self._last_type_target = el.index if el.role == "frame" else None
             elif operation == "SELECT":
                 plan["text"] = self._select_option(goal, screen, el, history)
+                self._last_type_target = None
+            else:
+                self._last_type_target = None
         elif operation == "KEY_ENTER":
             plan = {"action": "key", "keys": "return"}
         elif operation == "SCROLL_DOWN":

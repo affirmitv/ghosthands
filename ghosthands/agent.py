@@ -117,13 +117,21 @@ class Agent:
             if a == "double_click":
                 time.sleep(0.09); self.hands.click()
         elif a == "type":
-            if plan.get("point"):
+            if plan.get("point") and not plan.get("no_focus_click"):
                 # Jev planner: the field is already located; focus it, clear it, then type.
                 frac = self._point(plan, frame, plan.get("target", ""), dims)
                 self.hands.move(frac[0], frac[1]); time.sleep(0.18)
-                self.hands.click(); time.sleep(0.15)
-                if plan.get("select_all"):
-                    self.hands.key("cmd+a"); time.sleep(0.08)
+                if plan.get("select_all") and getattr(self.hands, "no_cmd_modifiers", False):
+                    # No Command key over VNC (Meta_L arrives as Option, so Cmd+A
+                    # would type a literal character): triple-click selects the
+                    # field's contents without modifiers.
+                    for _ in range(3):
+                        self.hands.click(); time.sleep(0.12)
+                    time.sleep(0.3)
+                else:
+                    self.hands.click(); time.sleep(0.15)
+                    if plan.get("select_all"):
+                        self.hands.key("cmd+a"); time.sleep(0.08)
             self.hands.type(plan.get("text", ""))
         elif a == "select":
             # Native <select>: open it, type the option (popup type-ahead), confirm with Return.

@@ -203,6 +203,11 @@ class VNCHands:
     """Hands implementation over RFB. Same fractional-coordinate contract as the
     other backends; scroll: positive amount = page down (guest must use
     traditional scroll direction, not macOS "natural")."""
+    # The Tart VNC server maps Meta_L to Option instead of Command, so
+    # Command-modified shortcuts (Cmd+A select-all, Cmd+L focus URL bar) do not
+    # work through these hands. Callers must use modifier-free alternatives.
+    no_cmd_modifiers = True
+
     def __init__(self, host=None, port=None, password=None, password_file=None, rfb=None):
         self._owns_rfb = rfb is None
         if rfb is not None:
