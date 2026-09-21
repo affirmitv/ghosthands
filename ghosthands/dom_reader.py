@@ -48,6 +48,20 @@ SNAPSHOT_JS = r"""(() => {
     if (!n) { const im = el.querySelector('img[alt]'); if (im) n = txt(im.alt); }
     if (!n && el.tagName === 'INPUT' && /^(submit|button|image)$/i.test(el.type || '')) n = txt(el.value);
     if (!n) n = txt(el.innerText || el.textContent);
+    // Disambiguate generic "Add to Cart" buttons with the product name from
+    // the enclosing product card link (Picket theme: button.product-card__quick-add
+    // inside a.product-card__link whose text is "Name $price Add to Cart").
+    if (/^add to cart$/i.test(n)) {
+      // NB: start from parentElement -- the button itself matches [class*="product-card"]
+      const card = el.parentElement && (el.parentElement.closest('a.product-card__link') ||
+                                        el.parentElement.closest('[class*="product-card"]'));
+      if (card) {
+        let ct = txt(card.innerText).replace(/add to cart/gi, '').trim();
+        const m = ct.match(/^(.*?)\s*\$[\d,.]+/);
+        if (m) n = 'Add to Cart: ' + m[1].trim();
+        else if (ct) n = 'Add to Cart: ' + ct.slice(0, 40);
+      }
+    }
     return n.slice(0, 80);
   };
   const role = el => {
