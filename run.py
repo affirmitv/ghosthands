@@ -15,7 +15,7 @@ def main():
     ap.add_argument("--goal"); ap.add_argument("--guide", default="")
     ap.add_argument("--run-dir", default=os.path.join(Config.runs_dir, "run"))
     ap.add_argument("--max-steps", type=int, default=80)
-    ap.add_argument("--hands", default=None, help="pico | dryrun | cliclick")
+    ap.add_argument("--hands", default=None, help="pico | dryrun | cliclick | vnc")
     ap.add_argument("--planner", default=None, help="vision (screenshot LLM) | jev (Safari element table + Jev decisions)")
     a = ap.parse_args()
     if a.goal_file:
@@ -28,11 +28,27 @@ def main():
         print("no OPENROUTER_API_KEY (env or ~/.config/ghosthands/openrouter.env)"); sys.exit(2)
     planner_kind = a.planner or Config.planner
     planner = JevPlanner() if planner_kind == "jev" else Planner()
-    agent = Agent(planner, Grounder(), make_hands(a.hands), run_dir=a.run_dir)
+    backend = a.hands or Config.hands_backend
+    if backend == "vnc":
+        # VNC run: eyes read the guest framebuffer over RFB and navigation drives
+        # the guest's Safari -- the host screen is never touched.
+        # One persistent RFB session for the whole run: tart's _VZVNCServer has
+        # crashed under connection churn, so hands, eyes and navigation share it.
+        from ghosthands.vnc import VNCEyes, VNCHands, open_session, vnc_navigate
+        rfb = open_session()
+        agent = Agent(planner, Grounder(), VNCHands(rfb=rfb), eyes=VNCEyes(rfb=rfb),
+                      run_dir=a.run_dir,
+                      navigate_fn=lambda url: vnc_navigate(url, rfb=rfb))
+    else:
+        agent = Agent(planner, Grounder(), make_hands(backend), run_dir=a.run_dir)
     print("planner=%s grounder=%s hands=%s run_dir=%s" % (
         Config.jev_model if planner_kind == "jev" else Config.planner_model,
-        Config.grounder_model, a.hands or Config.hands_backend, a.run_dir))
-    result = agent.run(goal, guide, max_steps=max_steps)
+        Config.grounder_model, backend, a.run_dir))
+    try:
+        result = agent.run(goal, guide, max_steps=max_steps)
+    finally:
+        if backend == "vnc":
+            rfb.close()
     print("RESULT:", result)
     if planner_kind == "jev":
         d = planner.decider

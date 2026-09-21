@@ -169,4 +169,7 @@ def make_hands(backend=None):
         return DryRunHands()
     if backend == "cliclick":
         return CliclickHands()
+    if backend == "vnc":
+        from .vnc import VNCHands
+        return VNCHands()
     return PicoHands()

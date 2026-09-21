@@ -13,6 +13,27 @@ def _load_key():
                 return m.group(1).strip().strip('"').strip("'")
     return None
 
+def _load_vnc_current():
+    """VNC connection info written by bin/tart-vm-up. The tart experimental VNC
+    endpoint (port + password) changes on every tart restart, so the helper
+    records the current values here; GH_VNC_* env vars still override."""
+    d = {}
+    p = os.path.expanduser("~/.config/ghosthands/tart-vnc-current.env")
+    try:
+        for line in open(p):
+            ls = line.lstrip()
+            if ls.startswith("#") or not ls.strip():
+                continue
+            m = re.match(r"(?:export\s+)?(VNC_HOST|VNC_PORT|VNC_PASSWORD|VNC_PASSWORD_FILE)\s*=\s*(.+)", ls)
+            if m:
+                d[m.group(1)] = m.group(2).strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return d
+
+_VNC = _load_vnc_current()
+
+
 class Config:
     api_key        = _load_key()
     base_url       = os.environ.get("GH_BASE_URL", "https://openrouter.ai/api/v1")
@@ -39,5 +60,15 @@ class Config:
     frame          = os.environ.get("GH_FRAME", "/tmp/gh_frame.jpg")
     trigger        = os.environ.get("GH_TRIGGER", "/tmp/gh_capture_now")
     pico_port      = os.environ.get("GH_PICO_PORT", "/dev/cu.usbmodem1101")
-    hands_backend  = os.environ.get("GH_HANDS", "pico")  # pico | dryrun
+    hands_backend  = os.environ.get("GH_HANDS", "cliclick")  # pico | dryrun | cliclick | vnc
     runs_dir       = os.environ.get("GH_RUNS_DIR", os.path.expanduser("~/gh-runs"))
+    # VNC backend (GH_HANDS=vnc): drive a Tart macOS VM's GUI over RFB with zero
+    # host-screen interaction. bin/tart-vm-up writes the current endpoint to
+    # ~/.config/ghosthands/tart-vnc-current.env (the tart experimental VNC port
+    # and password change on every tart restart); GH_VNC_* env vars override.
+    vnc_host         = os.environ.get("GH_VNC_HOST", _VNC.get("VNC_HOST", ""))
+    vnc_port         = int(os.environ.get("GH_VNC_PORT", _VNC.get("VNC_PORT", "5900")))
+    vnc_password     = os.environ.get("GH_VNC_PASSWORD", _VNC.get("VNC_PASSWORD"))
+    vnc_password_file = os.environ.get("GH_VNC_PASSWORD_FILE",
+                                       _VNC.get("VNC_PASSWORD_FILE",
+                                                os.path.expanduser("~/.config/ghosthands/tart-vnc.env")))

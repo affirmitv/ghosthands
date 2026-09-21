@@ -9,12 +9,16 @@ def safari_navigate(url):
         'tell application "Safari" to set URL of front document to "%s"' % url], check=False)
 
 class Agent:
-    def __init__(self, planner, grounder, hands, eyes=None, run_dir=None, browser_nav=True):
+    def __init__(self, planner, grounder, hands, eyes=None, run_dir=None,
+                 browser_nav=True, navigate_fn=None):
         self.planner = planner
         self.grounder = grounder
         self.hands = hands
         self.eyes = eyes or Eyes()
         self.browser_nav = browser_nav
+        # navigate_fn(url): how the "navigate" action opens a URL. Defaults to the
+        # host's Safari via osascript; the VNC backend passes vnc_navigate instead.
+        self.navigate_fn = navigate_fn or safari_navigate
         self.run_dir = run_dir or os.path.join(Config.runs_dir, "run")
         os.makedirs(self.run_dir, exist_ok=True)
         self.log_path = os.path.join(self.run_dir, "log.jsonl")
@@ -141,7 +145,7 @@ class Agent:
             self.hands.scroll(amt)
         elif a == "navigate":
             if self.browser_nav:
-                safari_navigate(plan.get("url", "")); time.sleep(2.2)
+                self.navigate_fn(plan.get("url", "")); time.sleep(2.2)
             else:
                 raise RuntimeError("navigate disabled")
         elif a == "wait":
