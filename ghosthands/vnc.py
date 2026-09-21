@@ -1,6 +1,7 @@
 """VNC (RFB 3.8) backend: drive a Tart macOS VM with zero host-screen interaction.
 
-Pure-python, dependency-light (stdlib + Pillow, which the host already has).
+Pure-python, dependency-light (stdlib only; Pillow is optional and used
+only by frame_image()).
 Selected with GH_HANDS=vnc; the guest is addressed with GH_VNC_HOST,
 GH_VNC_PORT (default 5900) and GH_VNC_PASSWORD_FILE
 (default ~/.config/ghosthands/tart-vnc.env, holding a VNC_PASSWORD=... line).
@@ -13,11 +14,17 @@ Guest setup notes (see docs/tart-vm.md):
 Coordinate model: every Hands method takes fractions of the guest framebuffer
 (0..1), exactly like the other backends; VNCHands maps them to guest pixels.
 """
-import re, socket, struct, time
+import re, socket, struct, time, zlib
 from .config import Config
 from ._des import vnc_password_response
 
 ENC_RAW = 0
+
+
+def _png_chunk(typ, data):
+    body = typ + data
+    return (struct.pack(">I", len(data)) + body
+            + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF))
 
 def load_vnc_password(path=None):
     if Config.vnc_password:
@@ -168,6 +175,31 @@ class RFBClient:
         from PIL import Image
         w, h, data = self.frame_bytes()
         return Image.frombytes("RGB", (w, h), data, "raw", "BGRX")
+
+    def frame_png_bytes(self):
+        """Current framebuffer as PNG bytes. Stdlib only (no Pillow)."""
+        w, h, bgrx = self.frame_bytes()
+        rgb = bytearray(w * h * 3)
+        rgb[0::3] = bgrx[2::4]  # R
+        rgb[1::3] = bgrx[1::4]  # G
+        rgb[2::3] = bgrx[0::4]  # B
+        stride = w * 3
+        raw = bytearray(h * (stride + 1))
+        for y in range(h):
+            o = y * (stride + 1)
+            raw[o] = 0  # filter type: none
+            raw[o + 1:o + 1 + stride] = rgb[y * stride:(y + 1) * stride]
+        ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
+        return (b"\x89PNG\r\n\x1a\n"
+                + _png_chunk(b"IHDR", ihdr)
+                + _png_chunk(b"IDAT", zlib.compress(bytes(raw), 6))
+                + _png_chunk(b"IEND", b""))
+
+    def save_screenshot(self, path):
+        """Save the current framebuffer as a PNG file (no Pillow needed)."""
+        with open(path, "wb") as f:
+            f.write(self.frame_png_bytes())
+        return path
 
     def pointer(self, x, y, mask):
         x = max(0, min(self.width - 1, int(x)))

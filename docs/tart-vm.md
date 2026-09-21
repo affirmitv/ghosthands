@@ -89,6 +89,26 @@ does this for every `GH_HANDS=vnc` run and closes the session in a
 `/Library/Preferences/com.apple.loginwindow.plist`. After a guest reboot,
 `/dev/console` becomes `admin` ~40 s after boot. Verified 2026-09-21.
 
+## Guest desktop hygiene
+
+`bin/tart-vm-up` refreshes `~/.config/ghosthands/tart-desktop-check.png`
+(one screenshot, mode 0600) on every invocation. **Eyeball it before starting
+an automation run**: if a modal dialog, installer, or consent prompt is
+front-and-center, the run's clicks will land on it instead of the app.
+
+Rules of thumb:
+
+- Never install software that needs a system-extension, VPN-configuration,
+  MDM, or Accessibility consent approval in the guest during (or just before)
+  an automation window. Those approvals require genuine human input (see the
+  quirk below), and a stuck dialog blocks all VNC automation until dismissed.
+- Close installers, updaters, and "what's new" windows before a run.
+- If a dialog does get stuck, the recovery ladder is: (1) genuine human
+  dismissal via a VNC viewer (may fail — it traverses the same injection path
+  macOS ignores), (2) remove the offending software / its launchd agent over
+  guest SSH, then reboot the guest (a reboot loses in-guest app state, e.g. a
+  staged Safari checkout), (3) as a last resort, deny/uninstall and reboot.
+
 ## Known quirks
 
 - **Modifier keys**: Tart's `_VZVNCServer` does not map X11 keysyms the way
@@ -101,6 +121,18 @@ does this for every `GH_HANDS=vnc` run and closes the session in a
 - **Resolution**: 1920×1080 once the desktop is up (1280×720 while booting).
 - **Scroll direction**: guest set to traditional (not "natural") so positive
   scroll amounts page down, matching the other hands backends.
+- **Security consent dialogs ignore synthetic input**: macOS requires genuine
+  human input on TCC / system-extension / VPN-configuration consent dialogs.
+  VNC clicks, AppleScript keystrokes, RFB key events, and killing the owning
+  daemons (`neagent`, `nesessionmanager`) all fail to dismiss them.
+  (2026-09-21: installing Tailscale in the guest raised "Tailscale Would Like
+  to Add VPN Configurations" plus a network-extension approval stuck at
+  `[activated waiting for user]`; the dialog sat front-and-center blocking all
+  VNC automation, and the guest never joined the tailnet.) To reach the guest
+  over the tailnet, prefer a **subnet route advertised by the Studio**
+  (`tailscale up --advertise-routes=192.168.64.0/24` on the Studio + one route
+  approval in the Tailscale admin console) — zero guest changes, no consent
+  dialogs.
 
 ## Files
 
@@ -111,5 +143,6 @@ does this for every `GH_HANDS=vnc` run and closes the session in a
 | `~/.config/ghosthands/tart-vnc-current.env` | current VNC endpoint (0600) |
 | `~/.config/ghosthands/guest-login.env` | guest `admin` credential (0600) |
 | `~/Development/ghosthands/bin/tart-vm-up` | bring-up helper |
+| `~/.config/ghosthands/tart-desktop-check.png` | latest guest desktop screenshot, refreshed by `bin/tart-vm-up` (0600) |
 
 No credential values are ever printed, logged, or committed.

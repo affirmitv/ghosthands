@@ -17,7 +17,8 @@
 # script to refresh the (changed) endpoint.
 #
 # Idempotent: safe to run any time; reuses the current file when the tart PID
-# has not changed.
+# has not changed. Always refreshes ~/.config/ghosthands/tart-desktop-check.png
+# (one screenshot) so an operator can eyeball guest-desktop hygiene before a run.
 set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
@@ -27,6 +28,8 @@ PLIST="$HOME/Library/LaunchAgents/${AGENT}.plist"
 LOG="$HOME/Library/Logs/tart-mac-gui.log"
 CRED_DIR="$HOME/.config/ghosthands"
 CUR="$CRED_DIR/tart-vnc-current.env"
+SHOT="$CRED_DIR/tart-desktop-check.png"
+mkdir -p "$CRED_DIR"
 
 if [ ! -f "$PLIST" ]; then
   echo "launchd agent not installed: $PLIST" >&2
@@ -49,48 +52,58 @@ done
 TPID=$(pgrep -f "tart run $VM" | head -1 || true)
 [ -n "$TPID" ] || { echo "tart process not found" >&2; exit 1; }
 
-# Reuse the current file if it belongs to this tart PID.
-if [ -f "$CUR" ]; then
-  # shellcheck disable=SC1090
-  if CUR_PID=$(grep -E "^# TART_PID=" "$CUR" | cut -d= -f2) && [ "$CUR_PID" = "$TPID" ]; then
-    echo "VNC endpoint unchanged (tart pid $TPID); reusing $CUR"
-    exit 0
-  fi
+# Resolve the VNC URL: reuse the current file when it belongs to this tart PID,
+# otherwise wait for a fresh endpoint in the launchd log.
+URL=""
+REUSED=0
+if [ -f "$CUR" ] && CUR_PID=$(grep -E "^# TART_PID=" "$CUR" | cut -d= -f2) && [ "$CUR_PID" = "$TPID" ]; then
+  VNC_HOST=$(grep -E "^VNC_HOST=" "$CUR" | cut -d= -f2)
+  VNC_PORT=$(grep -E "^VNC_PORT=" "$CUR" | cut -d= -f2)
+  VNC_PASSWORD=$(grep -E "^VNC_PASSWORD=" "$CUR" | cut -d= -f2-)
+  URL="vnc://:${VNC_PASSWORD}@${VNC_HOST}:${VNC_PORT}"
+  echo "VNC endpoint unchanged (tart pid $TPID); reusing $CUR"
+  REUSED=1
+else
+  echo -n "waiting for VNC endpoint in log"
+  for _ in $(seq 1 60); do
+    URL=$(grep -oE "vnc://:[^@]+@127\.0\.0\.1:[0-9]+" "$LOG" 2>/dev/null | tail -1 || true)
+    if [ -n "$URL" ]; then echo " -- found"; break; fi
+    echo -n "."; sleep 2
+  done
+  [ -n "$URL" ] || { echo; echo "no VNC URL in $LOG" >&2; exit 1; }
 fi
 
-echo -n "waiting for VNC endpoint in log"
-URL=""
-for _ in $(seq 1 60); do
-  URL=$(grep -oE "vnc://:[^@]+@127\.0\.0\.1:[0-9]+" "$LOG" 2>/dev/null | tail -1 || true)
-  if [ -n "$URL" ]; then echo " -- found"; break; fi
-  echo -n "."; sleep 2
-done
-[ -n "$URL" ] || { echo; echo "no VNC URL in $LOG" >&2; exit 1; }
-
-# Verify with one COMPLETE RFB handshake (auth + ServerInit), then disconnect.
+# Verify with one COMPLETE RFB handshake (auth + ServerInit), capture one
+# desktop screenshot for hygiene, then disconnect.
 # A bare banner read leaves a half-open handshake that has coincided with
 # _VZVNCServer crashes; always finish what we start.
 echo -n "verifying RFB endpoint"
-if ! PYTHONPATH="$HOME/Development/ghosthands" python3 - "$URL" << "PYEOF"; then
+if ! PYTHONPATH="$HOME/Development/ghosthands" python3 - "$URL" "$SHOT" << "PYEOF"; then
 import sys, urllib.parse
 sys.path.insert(0, "/Users/ericbrookfield/Development/ghosthands")
 from ghosthands.vnc import RFBClient
-url = sys.argv[1]
+url, shot_path = sys.argv[1], sys.argv[2]
 # vnc://:PASSWORD@127.0.0.1:PORT (password may be URL-encoded)
 pw = urllib.parse.unquote(url.split("vnc://:")[1].split("@")[0])
 hostport = url.split("@")[1]
 host, port = hostport.rsplit(":", 1)
 r = RFBClient(host, int(port), pw).connect()
 print(" RFB OK %dx%d" % (r.width, r.height))
+r.save_screenshot(shot_path)
+print(" desktop screenshot saved")
 r.close()
 PYEOF
   echo; echo "RFB verification failed" >&2
   exit 1
 fi
-echo " -- verified"
+chmod 600 "$SHOT"
+echo " -- verified (screenshot: $SHOT)"
 
-mkdir -p "$CRED_DIR"
 umask 077
+if [ "$REUSED" = "1" ]; then
+  echo "VNC ready (reused endpoint, screenshot refreshed)"
+  exit 0
+fi
 PORT=$(echo "$URL" | grep -oE ":[0-9]+$" | tr -d :)
 PW=$(echo "$URL" | sed -E 's|vnc://:([^@]+)@.*|\1|')
 {
