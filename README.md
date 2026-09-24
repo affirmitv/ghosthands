@@ -135,11 +135,23 @@ What Jev adds beyond speed:
   A Jev scroll first parks the pointer over the page (wheel input goes to whatever is under the
   pointer) and moves `GH_JEV_SCROLL_NOTCHES` (default 3) notches, under one viewport on the
   tested Mac, so no row slips past between two reads of the table.
+- **Dead-click guard.** A CLICK that leaves the page unchanged once the settle time passes (same
+  element table, URL and title) marks that control dead for the rest of the run: it is dropped
+  from the table Jev picks from and Jev is told "clicked [N] label; nothing changed; choose
+  something else". After two dead clicks in a row the next step scrolls down without a decision
+  (unless the scroll guard is holding scrolls back). Text fields and dropdowns are never marked
+  dead (a click on them only focuses). `GH_JEV_DEAD_CLICK_GUARD=0` turns it off.
+- **Loading wait.** After a CLICK or Enter, a loading signal that was not on the page before (a
+  disabled submit, `aria-busy`, a progress bar, a control or status region reading "Loading...",
+  "Reading it...", "Please wait") is polled every 0.5 s without Jev decisions until it clears,
+  the URL changes, or `GH_JEV_LOADING_WAIT_S` (default 45) passes. A low-confidence decision
+  right after a WAIT that left the page unchanged waits again (twice at most) instead of pausing
+  for a human. `GH_JEV_LOADING_WAIT_S=0` turns both off.
 
 Configuration: `GH_PLANNER=jev`, `GH_JEV_MODEL` (default `typesafe/jev-1.13`; `~typesafe/jev-latest`
 tracks the newest), `GH_JEV_URL` (default OpenRouter's `/api/alpha/decisions`; point it at
 `https://api.typesafe.ai/v1/systemone` with a TypeSafe key to go direct), `GH_JEV_TEXT_MODEL`,
-`GH_JEV_MIN_CONFIDENCE`, `GH_JEV_VERIFY_DONE`, `GH_JEV_MAX_SCROLLS`, `GH_JEV_SCROLL_NOTCHES`. The vision lane is unchanged
+`GH_JEV_MIN_CONFIDENCE`, `GH_JEV_VERIFY_DONE`, `GH_JEV_MAX_SCROLLS`, `GH_JEV_SCROLL_NOTCHES`, `GH_JEV_DEAD_CLICK_GUARD`, `GH_JEV_LOADING_WAIT_S`. The vision lane is unchanged
 and remains the default.
 
 ## Why this exists: Firmi and the systems with no API

@@ -343,7 +343,9 @@ class JevPlanner:
                  min_target_confidence: Optional[float] = None,
                  verifier: Optional[DoneVerifier] = None,
                  verify_done: Optional[bool] = None,
-                 max_scrolls: Optional[int] = None) -> None:
+                 max_scrolls: Optional[int] = None,
+                 dead_click_guard: Optional[bool] = None,
+                 loading_wait_s: Optional[float] = None) -> None:
         self.reader = reader or SafariReader()
         self.decider = decider or JevDecider()
         self.text_helper = text_helper or TextHelper()
@@ -360,6 +362,16 @@ class JevPlanner:
         self._pending_commit: Optional[tuple] = None  # (url, control) a human is being asked to approve
         self.settle_timeout = Config.jev_settle_s  # seconds to wait for the page to change after an action
         self.settle_poll = 0.1
+        # Dead-click guard: controls whose click changed nothing, keyed (url, role, label).
+        self.dead_click_guard = Config.jev_dead_click_guard if dead_click_guard is None else dead_click_guard
+        self._dead: set = set()
+        self._dead_streak = 0
+        self._last_click: Optional[dict] = None  # the click the previous step planned
+        # Loading wait: poll (no Jev decisions) while a new loading signal is on the page.
+        self.loading_wait_s = Config.jev_loading_wait_s if loading_wait_s is None else loading_wait_s
+        self.loading_poll = 0.5
+        self._wait_grace = 0
+        self._last_loading: Optional[dict] = None
 
     def _note(self, history: list[str], note: str) -> None:
         self._notes.append((len(history), note))
@@ -399,13 +411,27 @@ class JevPlanner:
                 "reasoning": ("verified DONE: %s" % why)[:200],
                 "jev": {"verify": why, "settle_s": round(settled_s, 2),
                         "controls": len(screen.elements)}}
+        if self._last_loading:
+            plan["jev"]["loading"] = self._last_loading
         self._scroll_streak, self._scroll_fp = 0, None
         return plan, json.dumps({"verify": {"done": True, "reason": why}})
 
     def decide(self, goal: str, guide: str, frame_path: str, history: list[str],
                dims: tuple[int, int]) -> tuple[dict, str]:
         screen, settled_s = self._settled_snapshot(history)
+        prev = self.last_screen
+        last = history[-1] if history else ""
+        self._last_loading = None
+        if self.loading_wait_s > 0 and prev is not None and last.startswith(("click:", "key:")):
+            screen, waited = self._wait_for_loading(history, prev, screen)
+            settled_s += waited
         self.last_screen = screen
+        after_idle_wait = (last.startswith("wait:") and prev is not None
+                           and screen.fingerprint() == prev.fingerprint())
+        self._check_dead_click(history, prev, screen)
+        # Controls whose click changed nothing are not offered again this run.
+        dead_idx = {e.index for e in screen.elements if self._is_dead(screen, e)}
+        jev_screen = screen.without(dead_idx) if dead_idx else screen
         verified: Optional[tuple[Optional[bool], str]] = None  # at most one check per step
         if self.verify_done and history and has_done_clause(guide):
             # The playbook names its success condition: stop the moment it shows, before Jev
@@ -423,7 +449,22 @@ class JevPlanner:
                            if unchanged else "scrolled %d times without progress; choose a control"
                            % self._scroll_streak)
 
-        res = self._ask(goal, guide, screen, history, exclude)
+        if self.dead_click_guard and self._dead_streak >= 2 and "SCROLL_DOWN" not in exclude:
+            # Two clicks in a row changed nothing: the control that matters is off screen.
+            self._dead_streak = 0
+            self._note(history, "2 clicks in a row changed nothing; scrolled down to reveal more")
+            plan = self._scroll_plan(screen, "down")
+            plan["observation"] = ("%d controls on '%s'" % (len(screen.elements), screen.title))[:160]
+            plan["reasoning"] = "dead-click guard: 2 clicks changed nothing, scroll instead"
+            plan["jev"] = {"settle_s": round(settled_s, 2), "controls": len(screen.elements),
+                           "dead": sorted(dead_idx)}
+            if exclude:
+                plan["jev"]["excluded"] = sorted(exclude)
+            self._scroll_streak += 1
+            self._scroll_fp = screen.fingerprint()
+            return plan, json.dumps({"dead_click_scroll": True})
+
+        res = self._ask(goal, guide, jev_screen, history, exclude)
         verified_done = False
         if self.verify_done and res["answers"]["operation"]["choice"] == "DONE":
             if verified is None:
@@ -432,7 +473,7 @@ class JevPlanner:
                 # Not done: tell Jev why and ask again without DONE on the menu.
                 self._note(history, "DONE rejected by check: %s" % verified[1])
                 exclude = exclude | {"DONE"}
-                res = self._ask(goal, guide, screen, history, exclude)
+                res = self._ask(goal, guide, jev_screen, history, exclude)
             elif verified[0] is True:
                 verified_done = True
         answers = res["answers"]
@@ -473,13 +514,7 @@ class JevPlanner:
         elif operation == "KEY_ENTER":
             plan = {"action": "key", "keys": "return"}
         elif operation in ("SCROLL_DOWN", "SCROLL_UP"):
-            plan = {"action": "scroll", "direction": "down" if operation == "SCROLL_DOWN" else "up",
-                    "amount": Config.jev_scroll_notches}
-            # Wheel input goes to whatever is under the pointer: park it over the page first,
-            # or a pointer left on the Dock or another window scrolls nothing.
-            pt = page_center(screen)
-            if pt is not None:
-                plan["point"] = list(pt)
+            plan = self._scroll_plan(screen, "down" if operation == "SCROLL_DOWN" else "up")
         elif operation == "WAIT":
             plan = {"action": "wait", "seconds": 1.5}
         elif operation == "VERIFY_STOP":
@@ -496,9 +531,16 @@ class JevPlanner:
             pass  # a DONE the check confirmed stands whatever Jev's confidence
         elif operation not in ("WAIT", "SCROLL_DOWN", "SCROLL_UP") and \
                 (op_p < self.min_confidence or tgt_p < self.min_target_confidence):
-            plan = {"action": "verify_stop",
-                    "reason": "low confidence %s p=%s target p=%s"
-                              % (operation, round(op_p, 2), round(tgt_p, 2))}
+            if after_idle_wait and self.loading_wait_s > 0 and self._wait_grace < 2:
+                # A WAIT that left the page unchanged is not evidence against the page: the
+                # content is still coming. Wait again (twice at most) rather than pause.
+                self._wait_grace += 1
+                self._note(history, "waited; page unchanged; waiting again before deciding")
+                plan = {"action": "wait", "seconds": 1.5}
+            else:
+                plan = {"action": "verify_stop",
+                        "reason": "low confidence %s p=%s target p=%s"
+                                  % (operation, round(op_p, 2), round(tgt_p, 2))}
         else:
             commit_desc = None
             if operation == "CLICK" and is_commit_control(plan.get("target", "")):
@@ -526,6 +568,10 @@ class JevPlanner:
                        "settle_s": round(settled_s, 2), "controls": len(screen.elements)}
         if exclude:
             plan["jev"]["excluded"] = sorted(exclude)
+        if dead_idx:
+            plan["jev"]["dead"] = sorted(dead_idx)
+        if self._last_loading:
+            plan["jev"]["loading"] = self._last_loading
         if verified is not None:
             plan["jev"]["verify"] = {"done": verified[0], "reason": verified[1]}
             if verified_done:
@@ -535,7 +581,84 @@ class JevPlanner:
             self._scroll_fp = screen.fingerprint()
         elif plan["action"] != "verify_stop":
             self._scroll_streak, self._scroll_fp = 0, None
+        if plan["action"] != "wait":
+            self._wait_grace = 0
+        if plan["action"] == "click" and operation == "CLICK":
+            el = screen.by_index(target_ans["choice"])
+            self._last_click = {"index": el.index, "label": el.label, "key": self._dead_key(screen, el),
+                                "fp": screen.fingerprint(), "url": screen.url, "title": screen.title,
+                                "typable": el.operations() != ["CLICK"]}
         return plan, json.dumps(res["raw"], separators=(",", ":"))
+
+    def _scroll_plan(self, screen: Screen, direction: str) -> dict:
+        plan = {"action": "scroll", "direction": direction, "amount": Config.jev_scroll_notches}
+        # Wheel input goes to whatever is under the pointer: park it over the page first,
+        # or a pointer left on the Dock or another window scrolls nothing.
+        pt = page_center(screen)
+        if pt is not None:
+            plan["point"] = list(pt)
+        return plan
+
+    @staticmethod
+    def _dead_key(screen: Screen, el: Element) -> tuple:
+        return (screen.url, el.role, el.label)
+
+    def _is_dead(self, screen: Screen, el: Element) -> bool:
+        # Only plain click targets: a text field or dropdown may show no change on a click
+        # (focus only) and must stay available for TYPE_TEXT / SELECT.
+        return (self.dead_click_guard and el.operations() == ["CLICK"]
+                and self._dead_key(screen, el) in self._dead)
+
+    def _check_dead_click(self, history: list[str], prev: Optional[Screen], screen: Screen) -> None:
+        """After a CLICK (and the settle time), an unchanged table, URL and title mark the target
+        dead for the rest of the run."""
+        lc, self._last_click = self._last_click, None
+        if not self.dead_click_guard or not history:
+            return
+        last = history[-1]
+        if lc is None or not last.startswith("click:"):
+            if not last.startswith(("wait:", "[human")):
+                self._dead_streak = 0  # "in a row" means clicks only
+            return
+        unchanged = (screen.fingerprint() == lc["fp"] and screen.url == lc["url"]
+                     and screen.title == lc["title"])
+        if not unchanged or lc["typable"]:
+            self._dead_streak = 0
+            return
+        self._dead.add(lc["key"])
+        self._dead_streak += 1
+        self._note(history, "clicked [%s] %s; nothing changed; choose something else"
+                   % (lc["index"], lc["label"][:60]))
+
+    def _wait_for_loading(self, history: list[str], prev: Screen,
+                          screen: Screen) -> tuple[Screen, float]:
+        """After a CLICK or Enter: when a loading signal appeared that the page did not show
+        before (a disabled submit, aria-busy, a control reading "Reading it..."), poll the page
+        without asking Jev until that signal clears, the URL changes, or the wait runs out."""
+        new = screen.busy_keys() - prev.busy_keys()
+        if not new:
+            return screen, 0.0
+        label = sorted(new)[0][0] or sorted(new)[0][1]
+        url0 = screen.url
+        t0 = time.time()
+        cleared = False
+        while time.time() - t0 < self.loading_wait_s:
+            time.sleep(self.loading_poll)
+            try:
+                screen = self.reader.snapshot()
+            except Exception as e:  # mid-navigation reads fail; keep polling
+                print("loading wait: page read failed (%s); retrying" % str(e)[:120], flush=True)
+                continue
+            if not (screen.busy_keys() & new) or screen.url != url0:
+                cleared = True
+                break
+        if cleared:
+            screen = self._hold_still(screen)
+        waited = time.time() - t0
+        self._last_loading = {"signal": label[:80], "waited_s": round(waited, 1), "cleared": cleared}
+        self._note(history, ("waited %.0f s while '%s' loaded" % (waited, label[:60])) if cleared else
+                   ("waited %.0f s; '%s' is still loading" % (waited, label[:60])))
+        return screen, waited
 
     def recover(self, hands) -> None:
         """Unblock the page reader. A native <select> popup or context menu freezes Safari's
@@ -568,9 +691,12 @@ class JevPlanner:
                 time.time() - t0 < self.settle_timeout:
             time.sleep(self.settle_poll)
             screen = self.reader.snapshot()
-        # Then require the table to hold still: two reads 0.2 s apart with the same
-        # positions. A smooth scroll or a slide-in panel otherwise hands out coordinates
-        # that are already wrong by the time the hands arrive.
+        return self._hold_still(screen), time.time() - t0
+
+    def _hold_still(self, screen: Screen) -> Screen:
+        """Require the table to hold still: two reads 0.2 s apart with the same positions. A
+        smooth scroll or a slide-in panel otherwise hands out coordinates that are already wrong
+        by the time the hands arrive."""
         t1 = time.time()
         while time.time() - t1 < 0.8:
             time.sleep(0.2)
@@ -578,7 +704,7 @@ class JevPlanner:
             if again.fingerprint() == screen.fingerprint():
                 break
             screen = again
-        return screen, time.time() - t0
+        return screen
 
     def _select_option(self, goal: str, screen: Screen, el: Element, history: list[str]) -> str:
         """Ask Jev which option of a native <select> serves the goal."""

@@ -47,6 +47,14 @@ class Config:
     # a Mac: 2 -> ~375 px, 3 -> ~865 px, 5 -> ~2000 px); 3 keeps a scroll under one viewport, so
     # no row passes between two reads of the table.
     jev_scroll_notches = int(os.environ.get("GH_JEV_SCROLL_NOTCHES", "3"))
+    # Dead-click guard: a CLICK that leaves the page unchanged (same table, URL and title once
+    # the settle time passes) marks that control dead for the rest of the run; it is dropped from
+    # the table Jev picks from, and after two dead clicks in a row the next step scrolls instead.
+    jev_dead_click_guard = os.environ.get("GH_JEV_DEAD_CLICK_GUARD", "1").strip().lower() not in ("0", "false", "no", "off", "")
+    # Loading wait: after a CLICK or Enter, a new loading signal (a disabled submit, aria-busy, a
+    # control reading "Loading..." / "Reading it...") is polled, without Jev decisions, until it
+    # clears or this many seconds pass. 0 turns it off.
+    jev_loading_wait_s = float(os.environ.get("GH_JEV_LOADING_WAIT_S", "45"))
     frame          = os.environ.get("GH_FRAME", "/tmp/gh_frame.jpg")
     trigger        = os.environ.get("GH_TRIGGER", "/tmp/gh_capture_now")
     pico_port      = os.environ.get("GH_PICO_PORT", "/dev/cu.usbmodem1101")
