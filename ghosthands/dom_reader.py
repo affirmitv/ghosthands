@@ -142,8 +142,24 @@ SNAPSHOT_JS = r"""(() => {
     if (t && t.length <= 80 && LOADING.test(t)) addBusy(el, dis ? 'disabled, loading text' : 'loading text', t);
     else if (dis && (el.type || '').toLowerCase() === 'submit') addBusy(el, 'disabled submit', t);
   });
+  // Text inside the viewport: the top of the page is not what is on screen after a scroll, and
+  // a DONE check that only sees the top can never find an answer further down.
+  const vt = [];
+  if (document.body) {
+    const tw = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let n, len = 0;
+    while ((n = tw.nextNode()) && len < 1500) {
+      const t = txt(n.textContent), pe = n.parentElement;
+      if (!t || !pe) continue;
+      const r = pe.getBoundingClientRect();
+      if (r.bottom <= 0 || r.top >= vh || r.width <= 0) continue;
+      const cs = getComputedStyle(pe);
+      if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+      vt.push(t); len += t.length + 1;
+    }
+  }
   return JSON.stringify({
-    busy,
+    busy, vtext: vt.join(' ').slice(0, 1500),
     title: document.title, url: location.href,
     text: txt(document.body ? document.body.innerText : '').slice(0, 1500),
     viewport: {w: vw, h: vh, sx: window.screenX, sy: window.screenY,
@@ -244,8 +260,11 @@ class Screen:
 
     def __init__(self, title: str, url: str, text: str, viewport: dict,
                  elements: list[Element], screen: tuple[int, int],
-                 busy: Optional[list] = None) -> None:
+                 busy: Optional[list] = None, vtext: str = "") -> None:
         self.title, self.url, self.text = title, url, text
+        # Text inside the viewport (the page text above is the top of the document). Not part of
+        # the fingerprint; used by the DONE / step check.
+        self.vtext = vtext or ""
         self.viewport, self.elements, self.screen = viewport, elements, screen
         # Loading signals on the page: [{label, why, x, y, w, h}] (a disabled submit, aria-busy,
         # a control reading "Loading..."). Not part of the element table or the fingerprint.
@@ -258,7 +277,8 @@ class Screen:
     def without(self, drop: set) -> "Screen":
         """A copy without the elements whose index is in `drop` (indices unchanged)."""
         return Screen(self.title, self.url, self.text, self.viewport,
-                      [e for e in self.elements if e.index not in drop], self.screen, self.busy)
+                      [e for e in self.elements if e.index not in drop], self.screen, self.busy,
+                      self.vtext)
 
     @classmethod
     def from_json(cls, data: dict, screen: tuple[int, int]) -> "Screen":
@@ -266,7 +286,7 @@ class Screen:
                        e.get("value", ""), e["x"], e["y"], e["w"], e["h"], e.get("options"))
                for i, e in enumerate(data.get("elements", []))]
         return cls(data.get("title", ""), data.get("url", ""), data.get("text", ""),
-                   data.get("viewport", {}), els, screen, data.get("busy"))
+                   data.get("viewport", {}), els, screen, data.get("busy"), data.get("vtext") or "")
 
     def by_index(self, idx: str) -> Element:
         for e in self.elements:
