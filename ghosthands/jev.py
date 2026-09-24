@@ -417,6 +417,14 @@ class DoneVerifier:
               "(\"DONE when ...\"), every part of it must be visible here; (3) a step the "
               "playbook says to take first that has not led here means false. When in doubt, "
               "false.")
+    # The multi-step check: the DONE clause decides, and the path may differ from the wording.
+    _PROGRESS_RULES = ("Check, in order: (1) if the goal or playbook names a product, site or "
+                       "page (for example an app name, a checkout, a team), the title and URL must "
+                       "show this page IS that one, not a different site with a similar box; (2) if "
+                       "the playbook names a condition (\"DONE when ...\"), every part of it must be "
+                       "visible here, and then it decides: a different link or path to this same "
+                       "page is fine; (3) the steps before the current one must be marked done. "
+                       "When in doubt, false.")
     _SYSTEM = ("You check whether a screen agent has finished its "
                "task. Be strict: answer true only when the success condition is plainly on the "
                "page. Reply with one JSON object and nothing else.")
@@ -470,7 +478,7 @@ class DoneVerifier:
                 "Answer JSON {\"reason\": \"<one sentence>\", \"step_done\": true|false, "
                 "\"done\": true|false}."
                 % (goal, scrub_guide(guide)[:2000], plan, "\n".join(trail[-8:]) or "(start page)",
-                   acts, compact_page(screen), self._RULES, current + 1, steps[current][:160]))
+                   acts, compact_page(screen), self._PROGRESS_RULES, current + 1, steps[current][:160]))
         obj = self._call(user)
         return (self._bool(obj.get("done")), str(obj.get("reason") or "")[:200],
                 self._bool(obj.get("step_done")))
@@ -562,6 +570,7 @@ class JevPlanner:
         self._backed_from: set = set()
         self._pending_back: Optional[str] = None  # page id a Back was pressed on
         self._step_clicks: dict = {}  # (page id, role, label) -> clicks during the current step
+        self._unsure_scrolls = 0  # low-confidence answers turned into a look below, this step
         self._filled: dict = {}  # (page id, role, label) -> text typed there and shown back
         self._last_type: Optional[tuple] = None  # (key, text) the previous step typed
 
@@ -645,6 +654,7 @@ class JevPlanner:
             self._home, self._off_home, self._left_home_via = page_id(screen.url), 0, None
             self._home_url = screen.url
             self._step_clicks = {}
+            self._unsure_scrolls = 0
             self._trail.append(("step %d done on '%s': %s" % (k + 1, screen.title[:50], why[:80]))[:200])
             self._note(history, "step %d done; now step %d: %s" % (k + 1, k + 2, self._steps[self._step_i][:100]))
         return done, why
@@ -969,6 +979,13 @@ class JevPlanner:
                 self._wait_grace += 1
                 self._note(history, "waited; page unchanged; waiting again before deciding")
                 plan = {"action": "wait", "seconds": 1.5}
+            elif self._steps and self._unsure_scrolls < 2 and "SCROLL_DOWN" not in exclude:
+                # Multi-step, on the step's own page: an unsure answer usually means the step's
+                # result or control is below the fold (a list that just loaded). Look before
+                # pausing for a human, twice per step at most.
+                self._unsure_scrolls += 1
+                self._note(history, "unsure (%s p=%.2f); scrolled down to see more" % (operation, op_p))
+                plan = self._scroll_plan(screen, "down")
             else:
                 plan = {"action": "verify_stop",
                         "reason": "low confidence %s p=%s target p=%s"

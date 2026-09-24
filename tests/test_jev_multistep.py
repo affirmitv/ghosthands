@@ -370,12 +370,15 @@ class TestStepGuards(unittest.TestCase):
         plan, _ = p.decide("g", guide, None, [], (0, 0))
         self.assertEqual(plan["action"], "click")
 
-    def test_low_confidence_elsewhere_still_pauses(self):
-        s = screen(["Chat", "Other"])
-        p = planner(SwitchReader(s), CtxDecider([("CLICK", "Chat")], op_p=0.2, tgt_p=0.5),
-                    ProgressVerifier())
-        plan, _ = p.decide("g", GUIDE, None, [], (0, 0))
-        self.assertEqual(plan["action"], "verify_stop")
+    def test_low_confidence_looks_below_twice_then_pauses(self):
+        reader = SwitchReader(screen(["Chat", "Other"]))
+        p = planner(reader, CtxDecider([("CLICK", "Chat")] * 3, op_p=0.2, tgt_p=0.5),
+                    ProgressVerifier(), max_scrolls=0)
+        acts = []
+        for i in range(3):
+            reader.cur = screen(["Chat", "Other", "row %d" % i])
+            acts.append(p.decide("g", GUIDE, None, ["scroll: "] * i, (0, 0))[0]["action"])
+        self.assertEqual(acts, ["scroll", "scroll", "verify_stop"])
 
     def test_scroll_step_allows_more_scrolls(self):
         guide = "Scroll down to the FAQ and find the cost question. Then click Get Firmi."

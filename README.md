@@ -182,24 +182,36 @@ What Jev adds beyond speed:
   for a human. A disabled submit with no loading text counts only when it is the control that
   was just clicked (opening an empty form or chat panel shows one too, and it never clears).
   `GH_JEV_LOADING_WAIT_S=0` turns both off.
-
 - **Multi-step tasks.** A playbook with two or more steps ("Click the Pull requests tab. Then
   open PR #4. Then click Files changed.") is split into ordered steps, with no model call (it
   parses sentences and "then"; a quoted label is never split). Jev is told the current step,
   the steps already done and a short trail of the pages visited, so it does not redo a finished
   step. The per-step check (the same single small-model call as the DONE check, now reading the
   text in view rather than the top of the page) also answers whether the current step is
-  complete, which advances it. Around it: a control the current step names word for word is
-  clicked in place of a look-alike, and a look-alike that differs in one number ("11U" when the
-  step says "14U") is skipped for a scroll; a step that says "scroll down" may scroll up to
-  three times the scroll guard's limit. `GH_JEV_SUBGOALS=0` turns all of this
-  off; single-step playbooks run exactly as before.
+  complete, which advances it. When the playbook has a "DONE when ..." clause, that clause
+  decides DONE. Around it: a control the current step names word for word is clicked in place
+  of a look-alike, and a look-alike that differs in one number ("11U" when the step says "14U")
+  is skipped for a scroll; a click whose target is near certain (p >= 0.8) passes a split
+  operation head (p >= 0.2); a step that says "scroll down" may scroll up to three times the
+  scroll guard's limit; an email field never gets a value without an @.
+- **Scroll to a named control.** The page reader also lists the controls above and below the
+  viewport with their page position. When the current step (or, on a single-step task, the
+  playbook) names one of them word for word and nothing on screen matches, the planner scrolls
+  straight toward it (2 to 5 notches by distance, up or down) without a Jev decision, at most
+  eight times per control. A single-step playbook gets this and the named-control rules above
+  (read against the whole playbook) and nothing else from the multi-step list.
+  `GH_JEV_SUBGOALS=0` turns off everything in these two bullets.
 - **Back-navigation recovery.** On a multi-step task, after `GH_JEV_BACKTRACK_AFTER` (default 4)
   decisions on a page other than the one the current step started on without the step
   completing, or when Jev asks for a human or answers below the confidence gate there (a sign-in
-  wall, a wrong link), the planner presses Back (`GH_JEV_BACK_KEYS`, default `cmd+left`) and marks
-  the link that led there as a wrong turn so it is not offered again. At most four backs per run;
-  a Back that does not navigate turns it off. `GH_JEV_BACKTRACK_AFTER=0` turns it off.
+  wall, a wrong link, a sign-in field), the planner goes back to the page the step started on
+  and marks the link that led away as a wrong turn so it is not offered again. `GH_JEV_BACK`
+  chooses how: `url` (default) points the tab at that page's URL, the way the navigate action
+  does; a chord such as `cmd+left` presses it instead (a focused text field eats that chord).
+  At most four backs per run; a Back that does not navigate turns it off.
+  `GH_JEV_BACKTRACK_AFTER=0` turns it off.
+- **Password fields.** The Jev lane never types into a password field; it pauses for a human
+  (or, on a multi-step task, goes back).
 
 `tools/jev_bench.py` holds the live benchmark: a multi-step suite and the five short tasks, each
 with its own end condition that the tool checks on the final page (URL, page text, text in view),
@@ -208,7 +220,7 @@ independent of the planner's DONE.
 Configuration: `GH_PLANNER=jev`, `GH_JEV_MODEL` (default `typesafe/jev-1.13`; `~typesafe/jev-latest`
 tracks the newest), `GH_JEV_URL` (default OpenRouter's `/api/alpha/decisions`; point it at
 `https://api.typesafe.ai/v1/systemone` with a TypeSafe key to go direct), `GH_JEV_TEXT_MODEL`,
-`GH_JEV_MIN_CONFIDENCE`, `GH_JEV_VERIFY_DONE`, `GH_JEV_MAX_SCROLLS`, `GH_JEV_SCROLL_NOTCHES`, `GH_JEV_DEAD_CLICK_GUARD`, `GH_JEV_LOADING_WAIT_S`, `GH_JEV_SUBGOALS`, `GH_JEV_BACKTRACK_AFTER`, `GH_JEV_BACK_KEYS`. The vision lane is unchanged
+`GH_JEV_MIN_CONFIDENCE`, `GH_JEV_VERIFY_DONE`, `GH_JEV_MAX_SCROLLS`, `GH_JEV_SCROLL_NOTCHES`, `GH_JEV_DEAD_CLICK_GUARD`, `GH_JEV_LOADING_WAIT_S`, `GH_JEV_SUBGOALS`, `GH_JEV_BACKTRACK_AFTER`, `GH_JEV_BACK`. The vision lane is unchanged
 and remains the default.
 
 ## Why this exists: Firmi and the systems with no API
