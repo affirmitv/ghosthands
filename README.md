@@ -5,12 +5,18 @@ person does: it looks at the screen, decides what to do, and moves a real mouse 
 **USB HID** — so the operating system cannot tell it from a human, and it works on **any** app,
 not just a browser DOM.
 
+> **The Jev fast lane is optional and experimental.** The vision lane is the default and the
+> one to rely on. The Jev lane (`--planner jev`) is still under development: it is fast and cheap
+> on short, single-goal web tasks in Safari, but it can still stop early or loop on long,
+> multi-step tasks. The premise holds (a decision model choosing operation and target from an
+> element table, at about $0.0001 and 0.4 s per step); the loop around it is still being hardened.
+
 It is three cheap parts:
 
 | Part | Role | Default |
 |------|------|---------|
-| 🧠 **Brain (fast lane)** | **Jev**, TypeSafe's decision model: reads an indexed table of the controls on screen and answers "which operation, which element" with calibrated probabilities in ~300 ms | `typesafe/jev-1.13` |
-| 🧠 **Brain (vision lane)** | a small *vision* LLM that sees a screenshot and picks the next action; used where no element table exists (native apps, games, BIOS) | `z-ai/glm-5.3-flash` |
+| 🧠 **Brain (fast lane, optional, experimental)** | **Jev**, TypeSafe's decision model: reads an indexed table of the controls on screen and answers "which operation, which element" with calibrated probabilities in ~300 ms | `typesafe/jev-1.13` |
+| 🧠 **Brain (vision lane, default)** | a small *vision* LLM that sees a screenshot and picks the next action; works on anything with a display (native apps, games, BIOS, any web page) | `z-ai/glm-5.3-flash` |
 | 👁️ **Eyes** | a GUI *grounding* model that turns "click the blue Create button" into an (x, y) | `bytedance/ui-tars-1.5-7b` |
 | ✋ **Hands** | a $4 Raspberry Pi Pico flashed as a USB-HID mouse+keyboard | Pico over serial |
 
@@ -48,7 +54,8 @@ python3 examples/trace_square.py
 python3 run.py --goal "Open TextEdit and type hello" \
                --guide "Use Spotlight (cmd+space) to open TextEdit, then type."
 
-# 5) Run a task on the Jev fast lane (Safari; enable Develop > Allow JavaScript from Apple Events):
+# 5) Optional, experimental: run a task on the Jev fast lane
+#    (Safari; enable Develop > Allow JavaScript from Apple Events):
 python3 run.py --planner jev \
                --goal "Open the schedule for the Oakland 14U Duckett team in this tournament." \
                --guide "Open the TEAMS tab, click the team, DONE when its games are listed."
@@ -56,6 +63,13 @@ python3 run.py --planner jev \
 ```
 
 ## The Jev fast lane
+
+**Status: optional and experimental, still under development.** The vision lane is the default.
+Use the Jev lane for short, single-goal tasks on a Safari page, where it is fast and cheap. On
+long, multi-step tasks it can still stop early on the wrong page or loop (scroll again and again,
+or click past the result it was sent to find). Two guards below reduce both, but they do not make
+it as dependable as the vision lane yet. The premise holds: a decision model choosing the
+operation and the target from an element table costs about $0.0001 and 0.4 s per step.
 
 [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast) showed the shape:
 every observation becomes a **numbered element table**, and one request to
@@ -107,11 +121,26 @@ What Jev adds beyond speed:
   asks Jev to pick among the literals already in the playbook (a product ID, a price, an email);
   only when none fits does a small text model write the value.
 
+- **Verified DONE.** Jev's DONE is not taken on its word. The small text model is asked a strict
+  yes or no ("is the goal's DONE condition satisfied on this page?") given the goal, the playbook,
+  the page title, URL, visible text and element table. A no is written into the recent actions Jev
+  sees ("DONE rejected by check: ...") and the step is asked again without DONE on the menu. When
+  the playbook states its own condition ("DONE when ...", "DONE as soon as ..."), the same check
+  runs after every action, so the run stops as soon as the condition shows instead of clicking
+  past it. At most one check per step. If the check itself fails, Jev's answer stands.
+  `GH_JEV_VERIFY_DONE=0` turns it off.
+- **Scroll guard.** After `GH_JEV_MAX_SCROLLS` (default 3) scrolls in a row, or after one scroll
+  that left the element table unchanged, the next decision is not offered SCROLL and Jev is told
+  "scrolled 3 times without progress; choose a control". `GH_JEV_MAX_SCROLLS=0` turns it off.
+  A Jev scroll first parks the pointer over the page (wheel input goes to whatever is under the
+  pointer) and moves `GH_JEV_SCROLL_NOTCHES` (default 3) notches, under one viewport on the
+  tested Mac, so no row slips past between two reads of the table.
+
 Configuration: `GH_PLANNER=jev`, `GH_JEV_MODEL` (default `typesafe/jev-1.13`; `~typesafe/jev-latest`
 tracks the newest), `GH_JEV_URL` (default OpenRouter's `/api/alpha/decisions`; point it at
 `https://api.typesafe.ai/v1/systemone` with a TypeSafe key to go direct), `GH_JEV_TEXT_MODEL`,
-`GH_JEV_MIN_CONFIDENCE`. The vision lane is unchanged and remains the default for anything that
-is not a Safari page.
+`GH_JEV_MIN_CONFIDENCE`, `GH_JEV_VERIFY_DONE`, `GH_JEV_MAX_SCROLLS`, `GH_JEV_SCROLL_NOTCHES`. The vision lane is unchanged
+and remains the default.
 
 ## Why this exists: Firmi and the systems with no API
 

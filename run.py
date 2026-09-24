@@ -37,6 +37,10 @@ def main():
     if planner_kind == "jev":
         d = planner.decider
         print("jev: %d decisions, $%.6f total (%s)" % (d.total_calls, d.total_cost, d.model))
+        v, t = planner.verifier, planner.text_helper
+        print("text model: %d done checks $%.6f, %d text writes $%.6f (%s); all-in $%.6f" % (
+            v.total_calls, v.total_cost, getattr(t, "total_calls", 0), getattr(t, "total_cost", 0.0),
+            v.model, d.total_cost + v.total_cost + getattr(t, "total_cost", 0.0)))
 
 if __name__ == "__main__":
     main()
