@@ -120,7 +120,30 @@ SNAPSHOT_JS = r"""(() => {
   }
   out.sort((a, b) => a.y - b.y || a.x - b.x);
   out.length = Math.min(out.length, 80);
+  // Loading signals. Disabled controls never enter the table above, so a submit button that
+  // turns into "Reading it..." while a request runs would simply vanish; list such signals here
+  // so the planner can wait for them to clear instead of deciding on a half-loaded page.
+  const LOADING = /(loading|reading|please wait|processing|submitting|\.\.\.\s*$|\u2026\s*$)/i;
+  const busy = [];
+  const addBusy = (el, why, label) => {
+    if (busy.length >= 12) return;
+    const r = el.getBoundingClientRect();
+    if (r.width <= 2 || r.height <= 2) return;
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden') return;
+    busy.push({label: (label || '').slice(0, 80), why,
+      x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height)});
+  };
+  document.querySelectorAll('[aria-busy="true"],[role=progressbar],progress').forEach(el =>
+    addBusy(el, 'busy', txt(el.getAttribute('aria-label') || el.innerText || el.textContent)));
+  document.querySelectorAll('button,input[type=submit],input[type=button],[role=button],a[href],[role=status],[aria-live]').forEach(el => {
+    const t = txt(el.tagName === 'INPUT' ? el.value : (el.innerText || el.textContent));
+    const dis = el.disabled || el.getAttribute('aria-disabled') === 'true';
+    if (t && t.length <= 80 && LOADING.test(t)) addBusy(el, dis ? 'disabled, loading text' : 'loading text', t);
+    else if (dis && (el.type || '').toLowerCase() === 'submit') addBusy(el, 'disabled submit', t);
+  });
   return JSON.stringify({
+    busy,
     title: document.title, url: location.href,
     text: txt(document.body ? document.body.innerText : '').slice(0, 1500),
     viewport: {w: vw, h: vh, sx: window.screenX, sy: window.screenY,
@@ -220,9 +243,22 @@ class Screen:
     """A snapshot of the front Safari tab: metadata plus indexed elements."""
 
     def __init__(self, title: str, url: str, text: str, viewport: dict,
-                 elements: list[Element], screen: tuple[int, int]) -> None:
+                 elements: list[Element], screen: tuple[int, int],
+                 busy: Optional[list] = None) -> None:
         self.title, self.url, self.text = title, url, text
         self.viewport, self.elements, self.screen = viewport, elements, screen
+        # Loading signals on the page: [{label, why, x, y, w, h}] (a disabled submit, aria-busy,
+        # a control reading "Loading..."). Not part of the element table or the fingerprint.
+        self.busy: list = list(busy or [])
+
+    def busy_keys(self) -> set:
+        """The loading signals as comparable (label, why) pairs; positions move with a scroll."""
+        return {(str(b.get("label") or ""), str(b.get("why") or "")) for b in self.busy}
+
+    def without(self, drop: set) -> "Screen":
+        """A copy without the elements whose index is in `drop` (indices unchanged)."""
+        return Screen(self.title, self.url, self.text, self.viewport,
+                      [e for e in self.elements if e.index not in drop], self.screen, self.busy)
 
     @classmethod
     def from_json(cls, data: dict, screen: tuple[int, int]) -> "Screen":
@@ -230,7 +266,7 @@ class Screen:
                        e.get("value", ""), e["x"], e["y"], e["w"], e["h"], e.get("options"))
                for i, e in enumerate(data.get("elements", []))]
         return cls(data.get("title", ""), data.get("url", ""), data.get("text", ""),
-                   data.get("viewport", {}), els, screen)
+                   data.get("viewport", {}), els, screen, data.get("busy"))
 
     def by_index(self, idx: str) -> Element:
         for e in self.elements:
