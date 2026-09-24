@@ -55,6 +55,21 @@ class Config:
     # control reading "Loading..." / "Reading it...") is polled, without Jev decisions, until it
     # clears or this many seconds pass. 0 turns it off.
     jev_loading_wait_s = float(os.environ.get("GH_JEV_LOADING_WAIT_S", "45"))
+    # Multi-step tasks. Subgoals: the playbook is split into ordered steps (no model call; it
+    # parses sentences and "then"); Jev is told the current step and a short trail of the pages
+    # already visited, and the per-step check (the same single small-model call as the DONE
+    # check) also says when the current step is complete, which advances it. Only a playbook
+    # with 2 or more steps turns this on. 0 turns it off.
+    jev_subgoals = os.environ.get("GH_JEV_SUBGOALS", "1").strip().lower() not in ("0", "false", "no", "off", "")
+    # Back-navigation recovery (multi-step playbooks only): after this many decisions on a page
+    # other than the one the current step started on, without the step completing, or when Jev
+    # asks for a human there, press Back and mark the link that led there as a wrong turn.
+    # 0 turns it off.
+    jev_backtrack_after = int(os.environ.get("GH_JEV_BACKTRACK_AFTER", "4"))
+    # How Back is done: "url" (default) points the tab at the last good page's URL, the way the
+    # navigate action does; a chord such as "cmd+left" presses it instead (a focused text field
+    # eats that chord, and the Pico keymap has no "[").
+    jev_back = os.environ.get("GH_JEV_BACK", "url")
     frame          = os.environ.get("GH_FRAME", "/tmp/gh_frame.jpg")
     trigger        = os.environ.get("GH_TRIGGER", "/tmp/gh_capture_now")
     pico_port      = os.environ.get("GH_PICO_PORT", "/dev/cu.usbmodem1101")
