@@ -11,6 +11,37 @@ not just a browser DOM.
 > multi-step tasks. The premise holds (a decision model choosing operation and target from an
 > element table, at about $0.0001 and 0.4 s per step); the loop around it is still being hardened.
 
+## What's new (2026-09-24)
+
+The Jev fast lane is still **optional and experimental**; the vision lane remains the default.
+Two merged changes hardened the loop on short web tasks:
+
+- **PR #3 (verified DONE, scroll guard).** Jev's DONE is now checked by a small text model with a
+  strict yes or no; a false DONE is rejected and the step is asked again. When the playbook says
+  "DONE when ...", the check runs after every action, so the run stops as soon as the condition
+  is met. A scroll guard allows at most 3 scrolls in a row (or 1 that changed nothing). Before a
+  wheel scroll the pointer is parked over the page, which was the real cause of the old scroll
+  loop, and a scroll moves 3 notches by default. The text model's reasoning is capped so it never
+  returns an empty answer. Targets are guide-aware, and "Type X into ..." literals are taken from
+  the guide.
+- **PR #4 (dead-click guard, loading wait).** A click that changes nothing marks the control dead
+  and drops it from Jev's table; two dead clicks in a row lead to a scroll. When a loading signal
+  appears (aria-busy, a progress bar, a disabled submit, or text such as "Loading", "Reading",
+  "Please wait"), the loop polls for up to `GH_JEV_LOADING_WAIT_S` (default 45 s) without spending
+  decisions. A WAIT that leaves the page unchanged no longer trips the confidence gate.
+
+Live benchmark on a real Mac (Safari, hardware mouse), 5 short web tasks:
+
+| Run | Tasks passed | Cost per task, all-in |
+|---|---|---|
+| 2026-09-23 night, before #3 | 1/5 | well under $0.002 |
+| after #3 | 3/5 | well under $0.002 |
+| after #4 | 5/5 | well under $0.002 |
+
+New flags: `GH_JEV_VERIFY_DONE` (default on, `0` turns it off), `GH_JEV_MAX_SCROLLS` (default 3,
+`0` turns the guard off), `GH_JEV_SCROLL_NOTCHES` (default 3), `GH_JEV_DEAD_CLICK_GUARD` (default
+on, `0` turns it off), `GH_JEV_LOADING_WAIT_S` (default 45, `0` turns it off). Details are in [The Jev fast lane](#the-jev-fast-lane).
+
 It is three cheap parts:
 
 | Part | Role | Default |
