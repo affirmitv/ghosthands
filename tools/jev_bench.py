@@ -164,10 +164,11 @@ def final_page() -> dict:
 
 
 def score(task: dict, page: dict) -> bool:
-    ok = bool(re.search(task["url_re"], page.get("url") or ""))
-    ok = ok and bool(re.search(task["text_re"], page.get("text") or ""))
+    # Case-insensitive: innerText applies CSS text-transform ("Fury" reads "FURY").
+    ok = bool(re.search(task["url_re"], page.get("url") or "", re.I))
+    ok = ok and bool(re.search(task["text_re"], page.get("text") or "", re.I))
     if task.get("view_re"):
-        ok = ok and bool(re.search(task["view_re"], page.get("view") or ""))
+        ok = ok and bool(re.search(task["view_re"], page.get("view") or "", re.I))
     return ok
 
 
