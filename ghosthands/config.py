@@ -66,8 +66,10 @@ class Config:
     # asks for a human there, press Back and mark the link that led there as a wrong turn.
     # 0 turns it off.
     jev_backtrack_after = int(os.environ.get("GH_JEV_BACKTRACK_AFTER", "4"))
-    # The Back chord. Safari takes cmd+[ and cmd+Left; the Pico keymap has "left", not "[".
-    jev_back_keys = os.environ.get("GH_JEV_BACK_KEYS", "cmd+left")
+    # How Back is done: "url" (default) points the tab at the last good page's URL, the way the
+    # navigate action does; a chord such as "cmd+left" presses it instead (a focused text field
+    # eats that chord, and the Pico keymap has no "[").
+    jev_back = os.environ.get("GH_JEV_BACK", "url")
     frame          = os.environ.get("GH_FRAME", "/tmp/gh_frame.jpg")
     trigger        = os.environ.get("GH_TRIGGER", "/tmp/gh_capture_now")
     pico_port      = os.environ.get("GH_PICO_PORT", "/dev/cu.usbmodem1101")

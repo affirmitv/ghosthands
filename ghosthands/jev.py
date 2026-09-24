@@ -362,6 +362,23 @@ def near_miss(label: str, step: str) -> Optional[str]:
     return None
 
 
+_PASSWORD_FIELD_RE = re.compile(r"password|passcode|\u2022{3,}|\*{4,}", re.I)
+_EMAIL_FIELD_RE = re.compile(r"e-?mail|@", re.I)
+
+
+def field_accepts(el: Optional[Element], text: str, check_email: bool = True) -> bool:
+    """False for a password field, or (check_email) for an email field and a value that is not
+    an email. (The reader never ships a password field's value; its placeholder is often dots.)"""
+    if el is None:
+        return True
+    label = "%s %s" % (el.label, el.role)
+    if _PASSWORD_FIELD_RE.search(label) or el.value == "(filled, hidden)":
+        return False
+    if check_email and _EMAIL_FIELD_RE.search(el.label or "") and "@" not in (text or ""):
+        return False
+    return True
+
+
 def _same_text(shown: str, typed: str) -> bool:
     return bool(typed) and (shown or "").strip().lower() == (typed or "").strip().lower()
 
@@ -445,7 +462,9 @@ class DoneVerifier:
         user = ("GOAL: %s\nPLAYBOOK: %s\nSTEPS:\n%s\nPAGES AND PROGRESS SO FAR:\n%s\n"
                 "ACTIONS TAKEN SO FAR:\n%s\n\n%s\n\n"
                 "Two questions. (a) done: is the goal's DONE condition satisfied on this page "
-                "right now? Judge only what this page shows. %s (b) step_done: is step %d "
+                "right now? Judge only what this page shows. When the playbook states a \"DONE "
+                "when ...\" condition, that condition decides; a goal that also asks to report or "
+                "read something is met when the page shows it or shows it is not there. %s (b) step_done: is step %d "
                 "(\"%s\") complete, meaning this page is where that step leads or plainly shows "
                 "its result? An earlier step being complete does not count. "
                 "Answer JSON {\"reason\": \"<one sentence>\", \"step_done\": true|false, "
@@ -533,6 +552,9 @@ class JevPlanner:
         self._step_i = 0
         self._trail: list[str] = []
         self._home: Optional[str] = None      # page id the current step started on
+        self._home_url: str = ""              # its full URL, where Back returns to
+        self._focus_single: Optional[str] = None  # single-step playbook's action sentences
+        self._named_tries: dict = {}          # (page id, label) -> scrolls toward it
         self._page: Optional[str] = None      # page id of the previous decision
         self._off_home = 0                    # decisions since leaving the home page
         self._left_home_via: Optional[tuple] = None  # dead-key of the click that left home
@@ -588,10 +610,10 @@ class JevPlanner:
         run has been away from it."""
         pid = page_id(screen.url)
         if self._home is None:
-            self._home = pid
+            self._home, self._home_url = pid, screen.url
         if self._pending_back is not None:
             if pid == self._pending_back:  # Back did nothing (a focused field ate the chord)
-                self._note(history, "Back key did not navigate; backtracking is off for this run")
+                self._note(history, "Back did not navigate; backtracking is off for this run")
                 self._backs = self.max_backtracks
             self._pending_back = None
         if self._page is not None and pid != self._page:
@@ -621,10 +643,38 @@ class JevPlanner:
             k = self._step_i
             self._step_i += 1
             self._home, self._off_home, self._left_home_via = page_id(screen.url), 0, None
+            self._home_url = screen.url
             self._step_clicks = {}
             self._trail.append(("step %d done on '%s': %s" % (k + 1, screen.title[:50], why[:80]))[:200])
             self._note(history, "step %d done; now step %d: %s" % (k + 1, k + 2, self._steps[self._step_i][:100]))
         return done, why
+
+    def _focus_text(self, guide: str) -> str:
+        """What the named-control heuristics read: the current step, or on a single-step task
+        the playbook's action sentences. Empty when subgoals are off."""
+        if self._steps:
+            return self._steps[self._step_i]
+        if not self.subgoals:
+            return ""
+        if self._focus_single is None:
+            self._focus_single = " ".join(
+                p for p in _step_pieces(scrub_guide(guide))
+                if _STEP_VERB_RE.search(p) and not _STEP_SKIP_RE.search(p))
+        return self._focus_single
+
+    def _named_offscreen(self, screen: Screen, focus: str) -> Optional[dict]:
+        """A control the focus text names word for word that sits above or below the viewport."""
+        pid = page_id(screen.url)
+        cands = [o for o in screen.offscreen
+                 if label_named_in(str(o.get("label") or ""), focus)
+                 and (screen.url, o.get("role"), o.get("label")) not in self._dead
+                 and self._named_tries.get((pid, o.get("label")), 0) < 8]
+        if not cands:
+            return None
+        top = float(screen.viewport.get("scrollY") or 0)
+        mid = top + float(screen.viewport.get("h") or 0) / 2.0
+        # The most specific label first, then the nearest.
+        return sorted(cands, key=lambda o: (-len(str(o["label"])), abs(float(o["y"]) - mid)))[0]
 
     def _can_backtrack(self, screen: Screen) -> bool:
         return (bool(self._steps) and self.backtrack_after > 0 and self._backs < self.max_backtracks
@@ -646,11 +696,16 @@ class JevPlanner:
         self._trail.append(("went back from '%s' (%s)" % (screen.title[:50], why))[:200])
         self._off_home = max(0, self.backtrack_after - 1)  # still lost after Back: back again
         self._scroll_streak, self._scroll_fp = 0, None
-        plan = {"action": "key", "keys": Config.jev_back_keys,
+        back = Config.jev_back
+        if back in ("", "url") and self._home_url:
+            plan = {"action": "navigate", "url": self._home_url}
+        else:
+            plan = {"action": "key", "keys": back if back not in ("", "url") else "cmd+left"}
+        plan.update({
                 "observation": ("%d controls on '%s'" % (len(screen.elements), screen.title))[:160],
                 "reasoning": ("backtrack: %s" % why)[:200],
                 "jev": {"backtrack": why, "wrong_turn": list(wrong) if wrong else None,
-                        "step": self._step_i + 1}}
+                        "step": self._step_i + 1}})
         return plan, json.dumps({"backtrack": why})
 
     def _verify(self, goal: str, guide: str, screen: Screen,
@@ -758,6 +813,34 @@ class JevPlanner:
             self._scroll_fp = screen.fingerprint()
             return plan, json.dumps({"dead_click_scroll": True})
 
+        focus = self._focus_text(guide)
+        if focus and screen.offscreen and not any(
+                label_named_in(e.label, focus) for e in jev_screen.elements if "CLICK" in e.operations()):
+            o = self._named_offscreen(screen, focus)
+            if o is not None:
+                # The playbook names this control and it is on the page, just not in view: scroll
+                # straight to it, no decision needed.
+                key = (page_id(screen.url), o["label"])
+                self._named_tries[key] = self._named_tries.get(key, 0) + 1
+                top = float(screen.viewport.get("scrollY") or 0)
+                h = float(screen.viewport.get("h") or 800)
+                y = float(o["y"]) - top
+                direction = "up" if y < 0 else "down"
+                dist = -y if y < 0 else y - h
+                plan = self._scroll_plan(screen, direction)
+                plan["amount"] = 2 if dist < 500 else (Config.jev_scroll_notches if dist < 2500 else 5)
+                plan["observation"] = ("%d controls on '%s'" % (len(screen.elements), screen.title))[:160]
+                plan["reasoning"] = ("scroll to named control '%s' (%s, %d px)"
+                                     % (str(o["label"])[:60], direction, dist))[:200]
+                plan["jev"] = {"scroll_to": str(o["label"])[:80], "settle_s": round(settled_s, 2),
+                               "controls": len(screen.elements)}
+                if self._steps:
+                    plan["jev"]["step"] = "%d/%d" % (self._step_i + 1, len(self._steps))
+                if verified is not None:
+                    plan["jev"]["verify"] = {"done": verified[0], "reason": verified[1]}
+                self._note(history, "scrolled %s toward '%s'" % (direction, str(o["label"])[:60]))
+                return plan, json.dumps({"scroll_to": o["label"]})
+
         res = self._ask(goal, guide, jev_screen, history, exclude)
         verified_done = False
         if self.verify_done and res["answers"]["operation"]["choice"] == "DONE":
@@ -788,8 +871,8 @@ class JevPlanner:
                 tgt_p = float((target_ans.get("probabilities") or {}).get(target_ans.get("choice")) or 0.0)
 
         step_named = False
-        if self._steps and operation == "CLICK" and target_ans:
-            step = self._steps[self._step_i]
+        if focus and operation == "CLICK" and target_ans:
+            step = focus
             chosen = screen.by_index(target_ans["choice"])
             if label_named_in(chosen.label, step):
                 step_named = True
@@ -813,8 +896,9 @@ class JevPlanner:
                     plan = self._scroll_plan(screen, "down")
                     plan["observation"] = ("%d controls on '%s'" % (len(screen.elements), screen.title))[:160]
                     plan["reasoning"] = "near miss: '%s' is not '%s'" % (chosen.label[:50], miss[:50])
-                    plan["jev"] = {"near_miss": [chosen.label[:80], miss[:80]], "cost": usage.get("cost"),
-                                   "step": "%d/%d" % (self._step_i + 1, len(self._steps))}
+                    plan["jev"] = {"near_miss": [chosen.label[:80], miss[:80]], "cost": usage.get("cost")}
+                    if self._steps:
+                        plan["jev"]["step"] = "%d/%d" % (self._step_i + 1, len(self._steps))
                     self._scroll_streak += 1
                     self._scroll_fp = screen.fingerprint()
                     return plan, json.dumps(res["raw"], separators=(",", ":"))
@@ -854,16 +938,29 @@ class JevPlanner:
         else:
             raise JevError("unknown operation %r" % operation)
 
+        # On a multi-step task a click whose target is near certain (p >= 0.8) is not noise even
+        # when the operation head is split (0.2 to 0.35 between CLICK and SCROLL).
+        sure_target = (bool(self._steps) and operation == "CLICK" and tgt_p >= 0.8 and op_p >= 0.2)
         low_conf = (operation not in ("WAIT", "SCROLL_DOWN", "SCROLL_UP") and not verified_done
-                    and not step_named
+                    and not step_named and not sure_target
                     and (op_p < self.min_confidence or tgt_p < self.min_target_confidence))
-        if (operation == "VERIFY_STOP" or low_conf) and self._can_backtrack(screen) and \
+        bad_type = operation == "TYPE_TEXT" and not field_accepts(
+            screen.by_index(target_ans["choice"]) if target_ans else None, plan.get("text", ""),
+            check_email=bool(self._steps))
+        if (operation == "VERIFY_STOP" or low_conf or bad_type) and self._can_backtrack(screen) and \
                 page_id(screen.url) not in self._backed_from and not (after_idle_wait and self._wait_grace < 2):
             # Lost on a page the current step did not lead to (a sign-in wall, a wrong link):
             # go back to the step's page instead of pausing for a human.
             return self._back_plan(history, screen, "Jev asked for a human" if operation == "VERIFY_STOP"
+                                   else "sign-in field or a value that does not fit it" if bad_type
                                    else "low confidence %s p=%.2f" % (operation, op_p))
-        if verified_done:
+        if bad_type:
+            # Never type into a password field, and never put a non-email into an email field:
+            # that is a sign-in form the playbook did not ask for (a human signs in).
+            plan = {"action": "verify_stop",
+                    "reason": "TYPE_TEXT %r into %s: a sign-in field or a value that does not fit it"
+                              % (plan.get("text", "")[:40], plan.get("target", ""))}
+        elif verified_done:
             pass  # a DONE the check confirmed stands whatever Jev's confidence
         elif low_conf:
             if after_idle_wait and self.loading_wait_s > 0 and self._wait_grace < 2:

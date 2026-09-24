@@ -84,7 +84,7 @@ MULTI = [
               "form and never submit it.",
      "expect": "the #get-firmi form in view after passing the FAQ cost answer",
      "url_re": r"firmi\.ai/(#get-firmi)?", "text_re": r"Club name",
-     "view_re": r"(Your name|Club name)"},
+     "view_re": r"(Your name|Club name|name of your club)"},
 ]
 
 SHORT = [
@@ -133,7 +133,9 @@ _PAGE_JS = ("JSON.stringify({url: location.href, title: document.title, "
             "document.documentElement, NodeFilter.SHOW_TEXT); let n; while ((n = w.nextNode()) && "
             "out.length < 400) { const r = n.parentElement && n.parentElement.getBoundingClientRect(); "
             "if (r && r.bottom > 0 && r.top < innerHeight && n.textContent.trim()) "
-            "out.push(n.textContent.trim()); } return out.join(' ').slice(0, 6000); })()})")
+            "out.push(n.textContent.trim()); } document.querySelectorAll('input[placeholder],textarea[placeholder]')"
+            ".forEach(e => { const r = e.getBoundingClientRect(); if (r.bottom > 0 && r.top < innerHeight) "
+            "out.push(e.placeholder); }); return out.join(' ').slice(0, 6000); })()})")
 
 
 def _osa(*lines: str) -> str:
@@ -202,6 +204,8 @@ def run_task(task: dict, max_steps: int, runs_dir: str, hands_backend: str | Non
            "jev_calls": d.total_calls, "checks": v.total_calls, "cost": round(all_in, 6),
            "wall_s": round(wall, 1), "final_url": (page.get("url") or "")[:160],
            "final_title": (page.get("title") or "")[:80], "pauses": pauses}
+    if not passed:
+        row["final_view"] = (page.get("view") or "")[:240]
     print("BENCH %s" % json.dumps(row), flush=True)
     return row
 

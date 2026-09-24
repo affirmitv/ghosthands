@@ -102,7 +102,22 @@ SNAPSHOT_JS = r"""(() => {
     }
     out.push(item);
   };
-  document.querySelectorAll(SEL).forEach(el => { const r = vis(el); if (r) push(el, r); });
+  // Controls above or below the viewport, by document position: a step that names one can scroll
+  // straight to it instead of guessing. Not part of the element table.
+  const off = [];
+  document.querySelectorAll(SEL).forEach(el => {
+    const r = vis(el);
+    if (r) { push(el, r); return; }
+    if (off.length >= 150 || el.disabled) return;
+    const b = el.getBoundingClientRect();
+    if (b.width <= 2 || b.height <= 2) return;
+    const cx = b.left + b.width / 2, cy = b.top + b.height / 2;
+    if (cx < 0 || cx > vw || (cy >= 0 && cy <= vh)) return;
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity <= 0) return;
+    const label = name(el);
+    if (label) off.push({label, role: role(el), y: Math.round(cy + window.scrollY)});
+  });
   // Legacy sites (Angular Material lists, table rows with handlers) make plain divs/rows
   // clickable with no role, href or onclick. The only tell is the pointer cursor. Take the
   // outermost such element that is not inside a control we already have and has short text.
@@ -159,10 +174,10 @@ SNAPSHOT_JS = r"""(() => {
     }
   }
   return JSON.stringify({
-    busy, vtext: vt.join(' ').slice(0, 1500),
+    busy, vtext: vt.join(' ').slice(0, 1500), offscreen: off,
     title: document.title, url: location.href,
     text: txt(document.body ? document.body.innerText : '').slice(0, 1500),
-    viewport: {w: vw, h: vh, sx: window.screenX, sy: window.screenY,
+    viewport: {w: vw, h: vh, sx: window.screenX, sy: window.screenY, scrollY: Math.round(window.scrollY),
                ow: window.outerWidth, oh: window.outerHeight,
                sw: (screen && screen.width) || 0, sh: (screen && screen.height) || 0},
     elements: out
@@ -260,11 +275,15 @@ class Screen:
 
     def __init__(self, title: str, url: str, text: str, viewport: dict,
                  elements: list[Element], screen: tuple[int, int],
-                 busy: Optional[list] = None, vtext: str = "") -> None:
+                 busy: Optional[list] = None, vtext: str = "",
+                 offscreen: Optional[list] = None) -> None:
         self.title, self.url, self.text = title, url, text
         # Text inside the viewport (the page text above is the top of the document). Not part of
         # the fingerprint; used by the DONE / step check.
         self.vtext = vtext or ""
+        # Controls outside the viewport: [{label, role, y}] with y the document position of the
+        # center. Not part of the element table or the fingerprint.
+        self.offscreen: list = list(offscreen or [])
         self.viewport, self.elements, self.screen = viewport, elements, screen
         # Loading signals on the page: [{label, why, x, y, w, h}] (a disabled submit, aria-busy,
         # a control reading "Loading..."). Not part of the element table or the fingerprint.
@@ -278,7 +297,7 @@ class Screen:
         """A copy without the elements whose index is in `drop` (indices unchanged)."""
         return Screen(self.title, self.url, self.text, self.viewport,
                       [e for e in self.elements if e.index not in drop], self.screen, self.busy,
-                      self.vtext)
+                      self.vtext, self.offscreen)
 
     @classmethod
     def from_json(cls, data: dict, screen: tuple[int, int]) -> "Screen":
@@ -286,7 +305,8 @@ class Screen:
                        e.get("value", ""), e["x"], e["y"], e["w"], e["h"], e.get("options"))
                for i, e in enumerate(data.get("elements", []))]
         return cls(data.get("title", ""), data.get("url", ""), data.get("text", ""),
-                   data.get("viewport", {}), els, screen, data.get("busy"), data.get("vtext") or "")
+                   data.get("viewport", {}), els, screen, data.get("busy"),
+                   data.get("vtext") or "", data.get("offscreen"))
 
     def by_index(self, idx: str) -> Element:
         for e in self.elements:

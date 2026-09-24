@@ -9,8 +9,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["OPENROUTER_API_KEY"] = "test"
 
 from ghosthands.dom_reader import Screen  # noqa: E402
-from ghosthands.jev import (JevDecider, JevPlanner, compact_page, label_named_in,  # noqa: E402
-                            near_miss, page_id, scrub_guide, split_subgoals)
+from ghosthands.dom_reader import Element  # noqa: E402
+from ghosthands.jev import (DoneVerifier, JevDecider, JevPlanner, compact_page,  # noqa: E402
+                            field_accepts, label_named_in, near_miss, page_id, scrub_guide,
+                            split_subgoals)
 
 VP = {"w": 1000, "h": 800, "sx": 100, "sy": 50, "ow": 1000, "oh": 900, "sw": 2000, "sh": 1600}
 SCR = (2000, 1600)
@@ -19,11 +21,11 @@ GUIDE = ("First click the Teams tab. Then click the Oakland 14U Fuca link. "
 
 
 def screen(labels, url="https://example.com/home", text="page text", title="T", busy=None,
-           roles=None, vtext=""):
+           roles=None, vtext="", offscreen=None, scroll_y=0):
     els = [{"label": l, "role": (roles or {}).get(l, "link"), "value": "", "x": 100,
             "y": 100 + 40 * i, "w": 80, "h": 30} for i, l in enumerate(labels)]
-    data = {"title": title, "url": url, "text": text, "viewport": VP, "elements": els,
-            "vtext": vtext}
+    data = {"title": title, "url": url, "text": text, "viewport": dict(VP, scrollY=scroll_y),
+            "elements": els, "vtext": vtext, "offscreen": offscreen or []}
     if busy is not None:
         data["busy"] = busy
     return Screen.from_json(data, SCR)
@@ -124,7 +126,7 @@ def planner(reader, decider, verifier=None, **kw):
 
 
 def hist_for(plan):
-    return "%s: %s" % (plan["action"], plan.get("target") or plan.get("keys") or "")
+    return "%s: %s" % (plan["action"], plan.get("target") or plan.get("keys") or plan.get("url") or "")
 
 
 class TestSplitSubgoals(unittest.TestCase):
@@ -254,11 +256,11 @@ class TestBacktrack(unittest.TestCase):
             plan, _ = p.decide("g", GUIDE, None, hist, (0, 0))
             actions.append(plan["action"])
             hist.append(hist_for(plan))
-            if plan["action"] == "key":
+            if plan["action"] == "navigate":
                 break
             reader.cur = screen(["X", "Y", "Z%d" % len(hist)], url="https://example.com/wrong", title="Wrong")
-        self.assertEqual(actions[-1], "key")
-        self.assertEqual(plan["keys"], "cmd+left")
+        self.assertEqual(actions[-1], "navigate")
+        self.assertEqual(plan["url"], "https://example.com/home")  # the last good page
         self.assertEqual(plan["jev"]["wrong_turn"][2], "Wrong link")
         # Back on the home page: the wrong turn is not offered again.
         reader.cur = home
@@ -275,7 +277,7 @@ class TestBacktrack(unittest.TestCase):
         plan, _ = p.decide("g", GUIDE, None, [], (0, 0))
         reader.cur = wall
         plan2, _ = p.decide("g", GUIDE, None, [hist_for(plan)], (0, 0))
-        self.assertEqual(plan2["action"], "key")
+        self.assertEqual(plan2["action"], "navigate")
         self.assertIn("asked for a human", plan2["jev"]["backtrack"])
 
     def test_verify_stop_on_home_page_stands(self):
@@ -288,8 +290,10 @@ class TestBacktrack(unittest.TestCase):
         p, reader, dec, home, wrong = self._lost(after=1)
         plan, _ = p.decide("g", GUIDE, None, [], (0, 0))
         reader.cur = wrong
-        plan, _ = p.decide("g", GUIDE, None, [hist_for(plan)], (0, 0))
+        with mock.patch("ghosthands.jev.Config.jev_back", "cmd+left"):
+            plan, _ = p.decide("g", GUIDE, None, [hist_for(plan)], (0, 0))
         self.assertEqual(plan["action"], "key")
+        self.assertEqual(plan["keys"], "cmd+left")
         # The page did not change after Back.
         plan, _ = p.decide("g", GUIDE, None, ["click: x", hist_for(plan)], (0, 0))
         self.assertNotEqual(plan["action"], "key")
@@ -303,7 +307,7 @@ class TestBacktrack(unittest.TestCase):
         reader.cur = wrong
         for i in range(6):
             plan, _ = p.decide("g", GUIDE, None, hist, (0, 0))
-            self.assertNotEqual(plan["action"], "key")
+            self.assertNotIn(plan["action"], ("key", "navigate"))
             hist.append(hist_for(plan))
             reader.cur = screen(["X", "Y", "Z%d" % i], url="https://example.com/wrong")
 
@@ -368,7 +372,8 @@ class TestStepGuards(unittest.TestCase):
 
     def test_low_confidence_elsewhere_still_pauses(self):
         s = screen(["Chat", "Other"])
-        p = planner(SwitchReader(s), CtxDecider([("CLICK", "Chat")], op_p=0.2), ProgressVerifier())
+        p = planner(SwitchReader(s), CtxDecider([("CLICK", "Chat")], op_p=0.2, tgt_p=0.5),
+                    ProgressVerifier())
         plan, _ = p.decide("g", GUIDE, None, [], (0, 0))
         self.assertEqual(plan["action"], "verify_stop")
 
@@ -428,6 +433,116 @@ class TestFilledField(unittest.TestCase):
 
     def test_guard_off(self):
         self.assertIn("Search for your club", self._run("Fury", guard=False))
+
+
+class TestScrollToNamed(unittest.TestCase):
+    def test_scrolls_toward_named_offscreen_control_without_a_decision(self):
+        guide = "Click Run sample and wait. Then click Start 14-day free trial."
+        s = screen(["GET FIRMI", "Chat"], scroll_y=5000,
+                   offscreen=[{"label": "Start 14-day free trial", "role": "link", "y": 3000}])
+        dec = CtxDecider(["CLICK"])
+        p = planner(SwitchReader(s), dec, ProgressVerifier())
+        p._steps = split_subgoals("g", guide)
+        p._step_i = 1
+        plan, _ = p.decide("g", guide, None, [], (0, 0))
+        self.assertEqual(plan["action"], "scroll")
+        self.assertEqual(plan["direction"], "up")
+        self.assertEqual(plan["amount"], 3)  # 2,000 px away
+        self.assertEqual(plan["jev"]["scroll_to"], "Start 14-day free trial")
+        self.assertEqual(len(dec.calls), 0)
+
+    def test_single_step_playbook_scrolls_down_to_it(self):
+        s = screen(["GET FIRMI"], offscreen=[{"label": "Start free", "role": "link", "y": 9000}])
+        dec = CtxDecider(["CLICK"])
+        p = planner(SwitchReader(s), dec, ProgressVerifier(), verify_done=False)
+        plan, _ = p.decide("g", "Click Start free (it opens the signup). DONE when it shows.", None, [], (0, 0))
+        self.assertEqual((plan["action"], plan["direction"], plan["amount"]), ("scroll", "down", 5))
+
+    def test_visible_named_control_needs_no_scroll(self):
+        s = screen(["Start free"], offscreen=[{"label": "Start free", "role": "link", "y": 9000}])
+        p = planner(SwitchReader(s), CtxDecider([("CLICK", "Start free")]), ProgressVerifier(),
+                    verify_done=False)
+        plan, _ = p.decide("g", "Click Start free.", None, [], (0, 0))
+        self.assertEqual(plan["action"], "click")
+
+    def test_gives_up_after_eight_tries_and_flag_off(self):
+        s = screen(["A"], offscreen=[{"label": "Start free", "role": "link", "y": 9000}])
+        p = planner(SwitchReader(s), CtxDecider(["CLICK"] * 12), ProgressVerifier(), verify_done=False,
+                    max_scrolls=0)
+        acts = [p.decide("g", "Click Start free.", None, ["x"] * i, (0, 0))[0].get("jev", {}).get("scroll_to")
+                for i in range(10)]
+        self.assertEqual(acts.count("Start free"), 8)
+        p = planner(SwitchReader(s), CtxDecider(["CLICK"]), ProgressVerifier(), verify_done=False,
+                    subgoals=False)
+        plan, _ = p.decide("g", "Click Start free.", None, [], (0, 0))
+        self.assertEqual(plan["action"], "click")
+
+    def test_offscreen_parsed_and_kept_by_without(self):
+        s = screen(["A", "B"], offscreen=[{"label": "C", "role": "link", "y": 10}])
+        self.assertEqual(s.without({"1"}).offscreen[0]["label"], "C")
+        self.assertNotEqual(s.fingerprint(), "")
+
+
+class TestTypeGuard(unittest.TestCase):
+    def test_field_accepts(self):
+        pw = Element("1", "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022", "textbox", "", 0, 0, 1, 1)
+        em = Element("2", "you@example.com", "textbox", "", 0, 0, 1, 1)
+        box = Element("3", "Search for your club", "textbox", "", 0, 0, 1, 1)
+        self.assertFalse(field_accepts(pw, "Lakeshow"))
+        self.assertFalse(field_accepts(em, "Lakeshow"))
+        self.assertTrue(field_accepts(em, "Lakeshow", check_email=False))
+        self.assertTrue(field_accepts(em, "a@b.co"))
+        self.assertTrue(field_accepts(box, "Lakeshow"))
+
+    def test_typing_a_club_name_into_sign_in_goes_back(self):
+        roles = {"you@example.com": "textbox"}
+        home = screen(["Sign in to Club", "Other"])
+        wall = screen(["you@example.com", "Sign In"], url="https://example.com/portal", roles=roles)
+        reader = SwitchReader(home)
+        dec = TypeDecider([("CLICK", "Sign in to Club"), "TYPE_TEXT"])
+        p = planner(reader, dec, ProgressVerifier(), backtrack_after=4)
+        guide = "Type Fury into the club search box. Then click the Fury result. Then find a game."
+        plan, _ = p.decide("g", guide, None, [], (0, 0))
+        reader.cur = wall
+        plan2, _ = p.decide("g", guide, None, [hist_for(plan)], (0, 0))
+        self.assertEqual(plan2["action"], "navigate")
+        self.assertIn("sign-in field", plan2["jev"]["backtrack"])
+
+
+class TestProgressPrompt(unittest.TestCase):
+    def test_one_call_returns_done_and_step(self):
+        seen = {}
+
+        def fake_chat(model, messages, **kw):
+            seen["user"] = messages[1]["content"]
+            kw["usage_out"].append({"cost": 0.0002})
+            return '{"reason": "team page open", "step_done": true, "done": false}'
+
+        with mock.patch("ghosthands.jev._chat", fake_chat):
+            v = DoneVerifier(model="m")
+            done, why, step_done = v.check_progress("g", "Click A. Then click B. DONE when C shows.",
+                                                    screen(["A"]), ["click: A"],
+                                                    ["Click A", "click B"], 0, ["opened 'A'"])
+        self.assertEqual((done, step_done, v.total_calls), (False, True, 1))
+        self.assertIn("1. Click A  <- CURRENT", seen["user"])
+        self.assertIn("that condition decides", seen["user"])
+        self.assertIn("opened 'A'", seen["user"])
+
+
+class TestSureTarget(unittest.TestCase):
+    def test_near_certain_target_passes_split_operation_on_multistep(self):
+        s = screen(["Sat Oct 3 game", "Other"], url="https://example.com/team")
+        p = planner(SwitchReader(s), CtxDecider([("CLICK", "Sat Oct 3 game")], op_p=0.3, tgt_p=0.9),
+                    ProgressVerifier())
+        plan, _ = p.decide("g", GUIDE, None, [], (0, 0))
+        self.assertEqual(plan["action"], "click")
+
+    def test_single_step_keeps_the_gate(self):
+        s = screen(["Sat Oct 3 game", "Other"])
+        p = planner(SwitchReader(s), CtxDecider([("CLICK", "Sat Oct 3 game")], op_p=0.2, tgt_p=0.9),
+                    ProgressVerifier(), verify_done=False)
+        plan, _ = p.decide("g", "Click the game.", None, [], (0, 0))
+        self.assertEqual(plan["action"], "verify_stop")
 
 
 class TestLoadingSignal(unittest.TestCase):
