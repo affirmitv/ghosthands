@@ -135,6 +135,9 @@ class Agent:
         elif a == "key":
             self.hands.key(plan.get("keys", ""))
         elif a == "scroll":
+            if plan.get("point"):
+                # Jev planner: wheel input lands under the pointer, so park it over the page.
+                self.hands.move(float(plan["point"][0]), float(plan["point"][1])); time.sleep(0.1)
             amt = int(plan.get("amount", 5))
             if plan.get("direction") == "up":
                 amt = -abs(amt)

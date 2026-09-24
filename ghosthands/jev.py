@@ -16,7 +16,7 @@ import urllib.request
 from collections import OrderedDict
 from typing import Optional
 
-from .brain import _chat
+from .brain import _chat, _parse_json
 from .config import Config
 from .dom_reader import Element, SafariReader, Screen
 
@@ -50,6 +50,7 @@ _NUM_RE = re.compile(r"(?<![A-Za-z\d.])\$?\d+(?:\.\d+)?(?![A-Za-z\d])")
 _DOTTED_RE = re.compile(r"\b[a-z][a-z0-9]*(?:\.[a-z0-9]+){2,}\b", re.I)
 _URL_RE = re.compile(r"https?://\S+")
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+_TYPE_INTO_RE = re.compile(r"\btype\s+(?!the\b|a\b|an\b|it\b)(\S.{0,79}?)\s+into\b", re.I)
 
 
 def extract_text_candidates(goal: str, guide: str) -> list[str]:
@@ -70,6 +71,8 @@ def extract_text_candidates(goal: str, guide: str) -> list[str]:
         add(m.group(2))
     for m in re.finditer(r'"([^"\n]{1,120})"', text):
         add(m.group(1))
+    for m in _TYPE_INTO_RE.finditer(text):
+        add(m.group(1))  # "Type Fury into the club search box" carries the literal unquoted
     for m in _DOTTED_RE.finditer(text):
         add(m.group(0))
     for m in _NUM_RE.finditer(text):
@@ -100,16 +103,20 @@ class JevDecider:
         self.total_calls = 0
 
     def build_questions(self, goal: str, guide: str, screen: Screen,
-                        history: list[str]) -> dict:
-        """Build the operation question plus speculative target heads."""
+                        history: list[str], exclude: Optional[set] = None) -> dict:
+        """Build the operation question plus speculative target heads. Operations named in
+        `exclude` are not offered (the scroll guard, a DONE the verifier rejected)."""
         questions: dict = {
             "operation": {
                 "type": "choice",
-                "criteria": dict(OPERATIONS),
+                "criteria": OrderedDict((k, v) for k, v in OPERATIONS.items()
+                                        if k not in (exclude or ())),
                 "instructions": {"goal": goal, "playbook": scrub_guide(guide)[:4000],
                                  "rules": _RULES},
             }
         }
+        # The target heads see the playbook too: "click a 14U team link" is in the playbook, not the goal.
+        playbook = scrub_guide(guide)[:1000]
         clickable = [e for e in screen.elements if "CLICK" in e.operations()]
         typable = [e for e in screen.elements if "TYPE_TEXT" in e.operations()]
         selects = [e for e in screen.elements if "SELECT" in e.operations()]
@@ -119,7 +126,8 @@ class JevDecider:
             questions["select_target"] = {
                 "type": "choice",
                 "criteria": {e.index: ("%s %s (%s)" % (e.role, e.label, e.value))[:100] for e in selects},
-                "instructions": {"goal": goal, "task": "Pick the dropdown to change for the next step toward the goal."},
+                "instructions": {"goal": goal, "playbook": playbook,
+                                 "task": "Pick the dropdown to change for the next step toward the goal."},
             }
         # Offer only operations that have a target (jev-ultrafast: "only supported
         # operations and targets are offered").
@@ -132,7 +140,7 @@ class JevDecider:
                 "type": "choice",
                 "criteria": {e.index: ("%s %s (%s)" % (e.role, e.label, e.value))[:100]
                              for e in clickable},
-                "instructions": {"goal": goal,
+                "instructions": {"goal": goal, "playbook": playbook,
                                  "task": "Pick the element to click/type into for the next step toward the goal."},
             }
         if typable:
@@ -140,7 +148,7 @@ class JevDecider:
                 "type": "choice",
                 "criteria": {e.index: ("%s %s (%s)" % (e.role, e.label, e.value))[:100]
                              for e in typable},
-                "instructions": {"goal": goal,
+                "instructions": {"goal": goal, "playbook": playbook,
                                  "task": "Pick the element to click/type into for the next step toward the goal."},
             }
         return questions
@@ -198,11 +206,11 @@ class JevDecider:
                 raise JevError("Jev answer %r missing probabilities" % name)
 
     def decide(self, goal: str, guide: str, screen: Screen,
-               history: list[str]) -> dict:
+               history: list[str], exclude: Optional[set] = None) -> dict:
         """Full decision: state -> questions -> validated answers."""
         t0 = time.time()
         state = screen.to_jev_state(history)
-        questions = self.build_questions(goal, guide, screen, history)
+        questions = self.build_questions(goal, guide, screen, history, exclude)
         resp = self.ask(state, questions)
         return {"answers": resp.get("answers", {}),
                 "usage": resp.get("usage", {}),
@@ -210,15 +218,23 @@ class JevDecider:
                 "raw": resp}
 
 
+# The small text model (a reasoning model by default) spends an uncapped token budget on
+# reasoning and returns empty content; cap the effort and leave room for the answer.
+_TEXT_EXTRA = {"reasoning": {"effort": "low"}}
+
+
 class TextHelper:
     """Writes the literal text for one TYPE_TEXT field via a small text LLM."""
 
     def __init__(self, model: Optional[str] = None) -> None:
         self.model = model or Config.jev_text_model
+        self.total_cost = 0.0
+        self.total_calls = 0
 
     def write(self, goal: str, guide: str, screen: Screen, element: Element,
               history: list[str]) -> str:
         hist = "\n".join(history[-8:]) if history else "(nothing yet)"
+        usage: list = []
         user = ("GOAL: %s\nPLAYBOOK: %s\nPAGE TITLE: %s\nFIELD: role=%s label=%s "
                 "current value=%s\nRECENT ACTIONS:\n%s\n\nReply with the exact "
                 "literal text to type into this field, nothing else."
@@ -229,8 +245,66 @@ class TextHelper:
              "agent. Reply with the exact literal text to type and NOTHING else. "
              "No quotes, no explanation."},
             {"role": "user", "content": user},
-        ], max_tokens=120)
+        ], max_tokens=600, extra=_TEXT_EXTRA, usage_out=usage)
+        self.total_calls += 1
+        self.total_cost += sum(float(u.get("cost") or 0.0) for u in usage)
         return raw.strip().strip('"').strip("'").strip()
+
+
+_DONE_CLAUSE_RE = re.compile(r"\bDONE\s+(?:when|as soon as|once|if|after)\b", re.I)
+
+
+def has_done_clause(guide: str) -> bool:
+    """True when the playbook states its own success condition ("DONE when ...")."""
+    return bool(_DONE_CLAUSE_RE.search(guide or ""))
+
+
+def compact_page(screen: Screen, max_lines: int = 60, max_chars: int = 3500) -> str:
+    """Title, URL, visible text and the element table, trimmed for a cheap text-model call."""
+    rows = screen.table().splitlines()[:max_lines]
+    out = ("PAGE TITLE: %s\nURL: %s\nVISIBLE TEXT: %s\nCONTROLS:\n%s"
+           % (screen.title, screen.url, (screen.text or "")[:1500], "\n".join(rows) or "(none)"))
+    return out[:max_chars]
+
+
+class DoneVerifier:
+    """Asks the small text model a strict yes/no: is the goal's DONE condition met on this page?"""
+
+    def __init__(self, model: Optional[str] = None) -> None:
+        self.model = model or Config.jev_text_model
+        self.total_cost = 0.0
+        self.total_calls = 0
+
+    def check(self, goal: str, guide: str, screen: Screen,
+              history: Optional[list[str]] = None) -> tuple[bool, str]:
+        """Return (done, reason). Raises on a failed call or an unparseable answer."""
+        acts = "\n".join((history or [])[-8:]) or "(none yet)"
+        user = ("GOAL: %s\nPLAYBOOK: %s\nACTIONS TAKEN SO FAR:\n%s\n\n%s\n\nIs the goal's DONE condition satisfied on this "
+                "page right now? Judge only what this page shows. Check, in order: (1) if the "
+                "goal or playbook names a product, site or page (for example an app name, a "
+                "checkout, a team), the title and URL must show this page IS that one, not a "
+                "different site with a similar box; (2) if the playbook names a condition "
+                "(\"DONE when ...\"), every part of it must be visible here; (3) a step the "
+                "playbook says to take first that has not led here means false. When in doubt, "
+                "false. Answer JSON {\"reason\": \"<one sentence>\", \"done\": true|false}."
+                % (goal, scrub_guide(guide)[:2000], acts, compact_page(screen)))
+        usage: list = []
+        raw = _chat(self.model, [
+            {"role": "system", "content": "You check whether a screen agent has finished its "
+             "task. Be strict: answer true only when the success condition is plainly on the "
+             "page. Reply with one JSON object and nothing else."},
+            {"role": "user", "content": user},
+        ], max_tokens=600, extra=_TEXT_EXTRA, usage_out=usage)
+        self.total_calls += 1
+        self.total_cost += sum(float(u.get("cost") or 0.0) for u in usage)
+        try:
+            obj = _parse_json(raw)
+        except ValueError as e:
+            raise JevError("done check returned non-JSON: %r (%s)" % (raw[:120], e))
+        done = obj.get("done")
+        if isinstance(done, str):
+            done = done.strip().lower() == "true"
+        return (done is True), str(obj.get("reason") or "")[:200]
 
 
 # Controls that commit money or mutate production. A click on one of these is never taken on
@@ -246,6 +320,17 @@ def is_commit_control(label: str) -> bool:
     return bool(_COMMIT_RE.search(label or ""))
 
 
+def page_center(screen: Screen) -> Optional[tuple[float, float]]:
+    """The center of the page viewport as screen fractions, or None when it is off the display."""
+    vp = screen.viewport
+    if not vp.get("w") or not vp.get("h"):
+        return None
+    try:
+        return Element("0", "", "", "", vp["w"] / 2.0, vp["h"] / 2.0, 0, 0).screen_point(vp, screen.screen)
+    except ValueError:
+        return None
+
+
 class JevPlanner:
     """Drop-in replacement for brain.Planner, driven by Jev decisions."""
 
@@ -255,10 +340,19 @@ class JevPlanner:
                  decider: Optional[JevDecider] = None,
                  text_helper: Optional[TextHelper] = None,
                  min_confidence: Optional[float] = None,
-                 min_target_confidence: Optional[float] = None) -> None:
+                 min_target_confidence: Optional[float] = None,
+                 verifier: Optional[DoneVerifier] = None,
+                 verify_done: Optional[bool] = None,
+                 max_scrolls: Optional[int] = None) -> None:
         self.reader = reader or SafariReader()
         self.decider = decider or JevDecider()
         self.text_helper = text_helper or TextHelper()
+        self.verify_done = Config.jev_verify_done if verify_done is None else verify_done
+        self.verifier = verifier or DoneVerifier()
+        self.max_scrolls = Config.jev_max_scrolls if max_scrolls is None else max_scrolls
+        self._notes: list[tuple[int, str]] = []  # (history position, note) shown to Jev as recent actions
+        self._scroll_streak = 0
+        self._scroll_fp: Optional[str] = None  # table fingerprint the last scroll was decided on
         self.min_confidence = Config.jev_min_confidence if min_confidence is None else min_confidence
         self.min_target_confidence = (Config.jev_min_target_confidence if min_target_confidence is None
                                       else min_target_confidence)
@@ -267,11 +361,80 @@ class JevPlanner:
         self.settle_timeout = Config.jev_settle_s  # seconds to wait for the page to change after an action
         self.settle_poll = 0.1
 
+    def _note(self, history: list[str], note: str) -> None:
+        self._notes.append((len(history), note))
+
+    def _jev_history(self, history: list[str]) -> list[str]:
+        """The agent's action history with the planner's own notes woven in where they happened."""
+        if not self._notes:
+            return history
+        out: list[str] = []
+        notes = sorted(self._notes, key=lambda n: n[0])
+        i = 0
+        for pos, h in enumerate(history):
+            while i < len(notes) and notes[i][0] <= pos:
+                out.append(notes[i][1]); i += 1
+            out.append(h)
+        out.extend(n for _, n in notes[i:])
+        return out
+
+    def _ask(self, goal: str, guide: str, screen: Screen, history: list[str],
+             exclude: set) -> dict:
+        hist = self._jev_history(history)
+        if exclude:
+            return self.decider.decide(goal, guide, screen, hist, exclude=exclude)
+        return self.decider.decide(goal, guide, screen, hist)
+
+    def _verify(self, goal: str, guide: str, screen: Screen,
+                history: list[str]) -> tuple[Optional[bool], str]:
+        """(True|False, reason), or (None, error) when the check itself failed."""
+        try:
+            return self.verifier.check(goal, guide, screen, history)
+        except Exception as e:  # a failed check never ends a run; the caller decides
+            return None, "done check failed: %s" % str(e)[:160]
+
+    def _done_plan(self, screen: Screen, settled_s: float, why: str) -> tuple[dict, str]:
+        plan = {"action": "done",
+                "observation": ("%d controls on '%s'" % (len(screen.elements), screen.title))[:160],
+                "reasoning": ("verified DONE: %s" % why)[:200],
+                "jev": {"verify": why, "settle_s": round(settled_s, 2),
+                        "controls": len(screen.elements)}}
+        self._scroll_streak, self._scroll_fp = 0, None
+        return plan, json.dumps({"verify": {"done": True, "reason": why}})
+
     def decide(self, goal: str, guide: str, frame_path: str, history: list[str],
                dims: tuple[int, int]) -> tuple[dict, str]:
         screen, settled_s = self._settled_snapshot(history)
         self.last_screen = screen
-        res = self.decider.decide(goal, guide, screen, history)
+        verified: Optional[tuple[Optional[bool], str]] = None  # at most one check per step
+        if self.verify_done and history and has_done_clause(guide):
+            # The playbook names its success condition: stop the moment it shows, before Jev
+            # has a chance to click past it.
+            verified = self._verify(goal, guide, screen, history)
+            if verified[0] is True:
+                return self._done_plan(screen, settled_s, verified[1])
+
+        exclude: set = set()
+        if self.max_scrolls > 0 and self._scroll_streak > 0:
+            unchanged = self._scroll_fp is not None and screen.fingerprint() == self._scroll_fp
+            if unchanged or self._scroll_streak >= self.max_scrolls:
+                exclude |= {"SCROLL_DOWN", "SCROLL_UP"}
+                self._note(history, "scrolled and the page did not change; choose a control"
+                           if unchanged else "scrolled %d times without progress; choose a control"
+                           % self._scroll_streak)
+
+        res = self._ask(goal, guide, screen, history, exclude)
+        verified_done = False
+        if self.verify_done and res["answers"]["operation"]["choice"] == "DONE":
+            if verified is None:
+                verified = self._verify(goal, guide, screen, history)
+            if verified[0] is False:
+                # Not done: tell Jev why and ask again without DONE on the menu.
+                self._note(history, "DONE rejected by check: %s" % verified[1])
+                exclude = exclude | {"DONE"}
+                res = self._ask(goal, guide, screen, history, exclude)
+            elif verified[0] is True:
+                verified_done = True
         answers = res["answers"]
         usage = res["usage"]
         op = answers["operation"]
@@ -309,10 +472,14 @@ class JevPlanner:
                 plan["text"] = self._select_option(goal, screen, el, history)
         elif operation == "KEY_ENTER":
             plan = {"action": "key", "keys": "return"}
-        elif operation == "SCROLL_DOWN":
-            plan = {"action": "scroll", "direction": "down", "amount": 5}
-        elif operation == "SCROLL_UP":
-            plan = {"action": "scroll", "direction": "up", "amount": 5}
+        elif operation in ("SCROLL_DOWN", "SCROLL_UP"):
+            plan = {"action": "scroll", "direction": "down" if operation == "SCROLL_DOWN" else "up",
+                    "amount": Config.jev_scroll_notches}
+            # Wheel input goes to whatever is under the pointer: park it over the page first,
+            # or a pointer left on the Dock or another window scrolls nothing.
+            pt = page_center(screen)
+            if pt is not None:
+                plan["point"] = list(pt)
         elif operation == "WAIT":
             plan = {"action": "wait", "seconds": 1.5}
         elif operation == "VERIFY_STOP":
@@ -325,7 +492,9 @@ class JevPlanner:
         else:
             raise JevError("unknown operation %r" % operation)
 
-        if operation not in ("WAIT", "SCROLL_DOWN", "SCROLL_UP") and \
+        if verified_done:
+            pass  # a DONE the check confirmed stands whatever Jev's confidence
+        elif operation not in ("WAIT", "SCROLL_DOWN", "SCROLL_UP") and \
                 (op_p < self.min_confidence or tgt_p < self.min_target_confidence):
             plan = {"action": "verify_stop",
                     "reason": "low confidence %s p=%s target p=%s"
@@ -355,6 +524,17 @@ class JevPlanner:
         plan["jev"] = {"operation": probs, "target": (target_ans or {}).get("probabilities", {}),
                        "cost": usage.get("cost"), "latency_s": res["latency_s"],
                        "settle_s": round(settled_s, 2), "controls": len(screen.elements)}
+        if exclude:
+            plan["jev"]["excluded"] = sorted(exclude)
+        if verified is not None:
+            plan["jev"]["verify"] = {"done": verified[0], "reason": verified[1]}
+            if verified_done:
+                plan["reasoning"] += " (verified: %s)" % verified[1][:120]
+        if plan["action"] == "scroll":
+            self._scroll_streak += 1
+            self._scroll_fp = screen.fingerprint()
+        elif plan["action"] != "verify_stop":
+            self._scroll_streak, self._scroll_fp = 0, None
         return plan, json.dumps(res["raw"], separators=(",", ":"))
 
     def recover(self, hands) -> None:

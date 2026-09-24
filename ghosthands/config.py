@@ -36,6 +36,17 @@ class Config:
     # After an action the planner re-reads the table (0.1 s each) until the page changes or this
     # many seconds pass. Legacy sites fetch a tab's content over the network; give them time.
     jev_settle_s   = float(os.environ.get("GH_JEV_SETTLE_S", "6.0"))
+    # Verified DONE: a DONE from Jev is checked by the small text model against the playbook's
+    # "DONE when ..." clause before the run stops; with such a clause the check also runs after
+    # every action so the run stops as soon as the condition shows. At most one check per step.
+    jev_verify_done = os.environ.get("GH_JEV_VERIFY_DONE", "1").strip().lower() not in ("0", "false", "no", "off", "")
+    # Scroll guard: after this many SCROLL decisions in a row (or one scroll that changed nothing)
+    # the next decision is not offered SCROLL. 0 turns the guard off.
+    jev_max_scrolls = int(os.environ.get("GH_JEV_MAX_SCROLLS", "3"))
+    # Wheel notches per Jev scroll. Travel grows faster than linearly with notches (measured on
+    # a Mac: 2 -> ~375 px, 3 -> ~865 px, 5 -> ~2000 px); 3 keeps a scroll under one viewport, so
+    # no row passes between two reads of the table.
+    jev_scroll_notches = int(os.environ.get("GH_JEV_SCROLL_NOTCHES", "3"))
     frame          = os.environ.get("GH_FRAME", "/tmp/gh_frame.jpg")
     trigger        = os.environ.get("GH_TRIGGER", "/tmp/gh_capture_now")
     pico_port      = os.environ.get("GH_PICO_PORT", "/dev/cu.usbmodem1101")

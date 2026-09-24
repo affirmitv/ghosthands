@@ -4,8 +4,12 @@ OpenAI-compatible endpoint works; defaults are cheap models on OpenRouter."""
 import json, base64, re, time, urllib.request
 from .config import Config
 
-def _chat(model, messages, max_tokens=400, temperature=0.0):
+def _chat(model, messages, max_tokens=400, temperature=0.0, extra=None, usage_out=None):
+    """One chat completion. `extra` merges into the request body (e.g. a reasoning cap);
+    `usage_out`, a list, receives the response's usage dict when given."""
     body = {"model": model, "temperature": temperature, "max_tokens": max_tokens, "messages": messages}
+    if extra:
+        body.update(extra)
     last = "no response"
     for attempt in range(4):
         try:
@@ -15,6 +19,8 @@ def _chat(model, messages, max_tokens=400, temperature=0.0):
                          "HTTP-Referer": "https://github.com/affirmi/ghosthands", "X-Title": "ghosthands"})
             r = json.load(urllib.request.urlopen(req, timeout=120))
             c = (((r.get("choices") or [{}])[0]).get("message") or {}).get("content")
+            if usage_out is not None and isinstance(r.get("usage"), dict):
+                usage_out.append(r["usage"])
             if c and c.strip():
                 return c
             last = "empty content %r" % c
