@@ -10,6 +10,7 @@ not just a browser DOM.
 > on short, single-goal web tasks in Safari, but it can still stop early or loop on long,
 > multi-step tasks. The premise holds (a decision model choosing operation and target from an
 > element table, at about $0.0001 and 0.4 s per step); the loop around it is still being hardened.
+> Improvements are ongoing and land in this public repo as they ship.
 
 ## What's new (2026-09-24)
 
