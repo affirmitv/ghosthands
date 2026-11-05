@@ -2,7 +2,7 @@
 """ghosthands CLI:  python3 run.py --goal-file examples/streamon3_subscriptions.py
 or drive a one-off:  python3 run.py --goal "..." --guide "..." """
 import argparse, importlib.util, os, sys
-from ghosthands import Planner, Grounder, JevPlanner, Agent, make_hands, Config
+from ghosthands import Planner, Grounder, JevPlanner, Agent, make_hands, make_terminal_mac, Config
 
 def load_task(path):
     spec = importlib.util.spec_from_file_location("gh_task", path)
@@ -17,6 +17,8 @@ def main():
     ap.add_argument("--max-steps", type=int, default=80)
     ap.add_argument("--hands", default=None, help="pico | dryrun | cliclick")
     ap.add_argument("--planner", default=None, help="vision (screenshot LLM) | jev (Safari element table + Jev decisions)")
+    ap.add_argument("--target", default=None, help="mac (this screen, default) | terminal-mac (a terminal-mac guest VM)")
+    ap.add_argument("--vm", default=None, help="terminal-mac VM name (default: default)")
     a = ap.parse_args()
     if a.goal_file:
         goal, guide, max_steps = load_task(a.goal_file)
@@ -27,11 +29,22 @@ def main():
     if not Config.api_key:
         print("no OPENROUTER_API_KEY (env or ~/.config/ghosthands/openrouter.env)"); sys.exit(2)
     planner_kind = a.planner or Config.planner
+    target = a.target or Config.target
+    if target == "terminal-mac":
+        if planner_kind == "jev":
+            print("--planner jev reads this Mac's Safari; use the vision planner with --target terminal-mac"); sys.exit(2)
+        eyes, hands = make_terminal_mac(a.vm)
+        hands_name = "terminal-mac:%s" % hands.vm.name
+    elif target == "mac":
+        eyes, hands = None, make_hands(a.hands)
+        hands_name = a.hands or Config.hands_backend
+    else:
+        print("unknown --target %r (mac | terminal-mac)" % target); sys.exit(2)
     planner = JevPlanner() if planner_kind == "jev" else Planner()
-    agent = Agent(planner, Grounder(), make_hands(a.hands), run_dir=a.run_dir)
+    agent = Agent(planner, Grounder(), hands, eyes=eyes, run_dir=a.run_dir)
     print("planner=%s grounder=%s hands=%s run_dir=%s" % (
         Config.jev_model if planner_kind == "jev" else Config.planner_model,
-        Config.grounder_model, a.hands or Config.hands_backend, a.run_dir))
+        Config.grounder_model, hands_name, a.run_dir))
     result = agent.run(goal, guide, max_steps=max_steps)
     print("RESULT:", result)
     if planner_kind == "jev":

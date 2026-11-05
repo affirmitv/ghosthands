@@ -9,12 +9,16 @@ def safari_navigate(url):
         'tell application "Safari" to set URL of front document to "%s"' % url], check=False)
 
 class Agent:
-    def __init__(self, planner, grounder, hands, eyes=None, run_dir=None, browser_nav=True):
+    def __init__(self, planner, grounder, hands, eyes=None, run_dir=None, browser_nav=True,
+                 navigate_fn=None):
         self.planner = planner
         self.grounder = grounder
         self.hands = hands
         self.eyes = eyes or Eyes()
         self.browser_nav = browser_nav
+        # How `navigate` opens a URL: an explicit function, else the hands' own (a VM target
+        # drives its guest browser), else AppleScript into this Mac's Safari.
+        self.navigate_fn = navigate_fn or getattr(hands, "navigate", None) or safari_navigate
         self.run_dir = run_dir or os.path.join(Config.runs_dir, "run")
         os.makedirs(self.run_dir, exist_ok=True)
         self.log_path = os.path.join(self.run_dir, "log.jsonl")
@@ -109,9 +113,12 @@ class Agent:
             desc = plan.get("target", "")
             frac = self._point(plan, frame, desc, dims)
             self.hands.move(frac[0], frac[1]); time.sleep(0.1)
-            self.hands.click()
-            if a == "double_click":
-                time.sleep(0.09); self.hands.click()
+            if a == "double_click" and hasattr(self.hands, "double_click"):
+                self.hands.double_click()
+            else:
+                self.hands.click()
+                if a == "double_click":
+                    time.sleep(0.09); self.hands.click()
         elif a == "type":
             if plan.get("point"):
                 # Jev planner: the field is already located; focus it, clear it, then type.
@@ -144,7 +151,7 @@ class Agent:
             self.hands.scroll(amt)
         elif a == "navigate":
             if self.browser_nav:
-                safari_navigate(plan.get("url", "")); time.sleep(2.2)
+                self.navigate_fn(plan.get("url", "")); time.sleep(2.2)
             else:
                 raise RuntimeError("navigate disabled")
         elif a == "wait":
