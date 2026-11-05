@@ -73,5 +73,11 @@ class Config:
     frame          = os.environ.get("GH_FRAME", "/tmp/gh_frame.jpg")
     trigger        = os.environ.get("GH_TRIGGER", "/tmp/gh_capture_now")
     pico_port      = os.environ.get("GH_PICO_PORT", "/dev/cu.usbmodem1101")
-    hands_backend  = os.environ.get("GH_HANDS", "pico")  # pico | dryrun
+    hands_backend  = os.environ.get("GH_HANDS", "pico")  # pico | dryrun | cliclick
+    # Where the task runs. "mac" = this Mac's screen (screenfeed eyes + GH_HANDS hands).
+    # "terminal-mac" = a terminal-mac guest VM: eyes and hands both go through its CLI.
+    target         = os.environ.get("GH_TARGET", "mac")
+    tmac_vm        = os.environ.get("GH_TMAC_VM", "default")
+    tmac_bin       = os.environ.get("GH_TMAC_BIN")          # default: terminal-mac on PATH, then ~/.local/bin
+    tmac_timeout   = int(os.environ.get("GH_TMAC_TIMEOUT", "20"))  # seconds per guest action
     runs_dir       = os.environ.get("GH_RUNS_DIR", os.path.expanduser("~/gh-runs"))

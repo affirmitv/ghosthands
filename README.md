@@ -94,6 +94,48 @@ python3 run.py --planner jev \
 # No Pico yet? --hands cliclick (brew install cliclick) moves your real pointer so you can watch the loop.
 ```
 
+## Run it inside a private Mac (terminal-mac)
+
+[terminal-mac](https://github.com/govijr/terminal-mac) (MIT) runs a separate macOS guest on Apple
+silicon and exposes its screen and input through a CLI. ghosthands can use that guest as its
+target: the same brain, the same grounding model and the same task file, with screenshots coming
+from the guest and clicks and keystrokes going into it. Your own screen, pointer, keyboard and
+clipboard are never touched, so you keep using the Mac while the agent works.
+
+![GhostHands filling a form inside a terminal-mac guest](docs/media/terminal-mac-demo.gif)
+
+Real run on a Mac mini (M6, 16 GB) with a macOS 27.2 guest, `examples/pizza_form.py`: Finder,
+Safari, six form fields, submit, verified result. 21 planner steps, 81 seconds, shown at 4x. The
+host pointer sat at the same position before and after. (The echoed public IP is blacked out.)
+
+| Target | Eyes | Hands | Use it for |
+|---|---|---|---|
+| `--target mac` (default) | `scripts/screenfeed.sh` | Pico USB-HID (or `--hands cliclick`) | the real Mac, real HID, apps that watch for synthetic input |
+| `--target terminal-mac` | `terminal-mac action NAME screenshot` | `terminal-mac action NAME click/type/key/scroll` | an agent's own Mac, sandboxed from yours |
+
+```bash
+# once: install terminal-mac and set up a guest (Setup Assistant, then grant the guest helper
+# Screen Recording + Accessibility inside the guest; see terminal-mac's README)
+curl -fsSL https://github.com/govijr/terminal-mac/releases/latest/download/get.sh | bash
+terminal-mac up
+
+# then run any task against the guest instead of your screen
+python3 run.py --target terminal-mac --goal-file examples/pizza_form.py
+python3 run.py --target terminal-mac --vm work --goal "Open TextEdit and type hello" \
+               --guide "Use Spotlight (cmd+space) to open TextEdit, then type."
+```
+
+How it maps: the grounding model returns a point as a fraction of the screenshot; the guest
+screenshot is in guest points, so the fraction becomes `click X Y` in the guest directly.
+`navigate` presses cmd+l in the guest's Safari, types the URL and presses Return; it assumes
+Safari is the front app in the guest, and the next screenshot shows whether the page loaded. `--planner jev` reads this Mac's Safari, so it is not
+available on this target; use the vision planner. Settings: `GH_TARGET`, `GH_TMAC_VM` (default
+`default`), `GH_TMAC_BIN`, `GH_TMAC_TIMEOUT`. Code: `ghosthands/terminal_mac.py`.
+
+The guest is still a separate Mac with its own accounts: it does not have your signed-in sessions,
+and it stops at its login screen until someone signs in. Input there is synthetic (CGEvent inside
+the guest), so for sites that look for a real human device, use the HID target.
+
 ## The Jev fast lane
 
 **Status: optional and experimental, still under development.** The vision lane is the default.
@@ -285,9 +327,10 @@ the raw wheel direction and which way the page moves follows the host's scroll-d
 ghosthands/        core library  (config, eyes, hands, brain, agent)
   jev.py           Jev fast lane: JevDecider (decisions endpoint), JevPlanner (drop-in brain)
   dom_reader.py    Safari element table with screen coordinates (no screenshot, no WebDriver)
-run.py             CLI  (--planner vision|jev, --hands pico|dryrun|cliclick)
+  terminal_mac.py  terminal-mac target: eyes + hands inside a macOS guest VM
+run.py             CLI  (--planner vision|jev, --hands pico|dryrun|cliclick, --target mac|terminal-mac)
 tests/             offline unit tests  (python3 -m unittest discover tests)
-examples/          trace_square.py, streamon3_subscriptions.py
+examples/          trace_square.py, streamon3_subscriptions.py, pizza_form.py
 scripts/           screenfeed.sh (the eyes) + firmware/ (the hands)
 docs/              HARDWARE.md, ARCHITECTURE.md
 ```

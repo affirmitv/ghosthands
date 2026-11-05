@@ -15,6 +15,12 @@ Four moving parts, each swappable:
 - **Hands (`hands.py::PicoHands`).** Real USB-HID injection via the Pico. Swap in `DryRunHands` to
   log actions without moving anything.
 
+- **Targets.** Eyes and hands come as a pair per target. `--target mac` (default) is this Mac's
+  screen through `screenfeed.sh` and the Pico. `--target terminal-mac` (`terminal_mac.py`) is a
+  terminal-mac guest VM: `TerminalMacEyes` takes guest screenshots and `TerminalMacHands` sends
+  click/type/key/scroll through the `terminal-mac action` CLI, one argv list per call. Hands may
+  provide `navigate(url)` and `double_click()`; the agent uses them when present.
+
 `agent.py::Agent.run(goal, guide)` is the loop: capture → plan → (ground if click) → act → append
 to history → repeat, with per-step screenshots, a jsonl log, and money checkpoints.
 

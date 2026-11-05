@@ -80,6 +80,10 @@ Rules:
 - Choose 'done' only when the whole GOAL is achieved and visible on screen.
 """
 
+# A reasoning planner (GLM-5.3-flash is one) can spend the whole token budget thinking and return
+# empty content; cap the effort so the JSON answer always fits.
+_PLANNER_EXTRA = {"reasoning": {"effort": "low"}}
+
 class Planner:
     def __init__(self, model=None):
         self.model = model or Config.planner_model
@@ -91,8 +95,18 @@ class Planner:
                 ("\n\nThe screenshot is %dx%d px. Decide the SINGLE next action as JSON." % (w, h)))
         msgs = [{"role": "system", "content": PLANNER_SYSTEM},
                 {"role": "user", "content": [{"type": "text", "text": text}, _img(frame_path)]}]
-        raw = _chat(self.model, msgs, max_tokens=500)
-        return _parse_json(raw), raw
+        raw = _chat(self.model, msgs, max_tokens=500, extra=_PLANNER_EXTRA)
+        try:
+            plan = _parse_json(raw)
+        except ValueError:
+            # A cut-off or chatty reply: ask once more with a firmer reminder before giving up.
+            msgs.append({"role": "assistant", "content": raw})
+            msgs.append({"role": "user", "content": "That was not one complete JSON object. Reply with ONLY the JSON object for the single next action, short observation and reasoning."})
+            raw = _chat(self.model, msgs, max_tokens=500, extra=_PLANNER_EXTRA)
+            plan = _parse_json(raw)
+        if "keys" not in plan and isinstance(plan.get("key"), str):
+            plan["keys"] = plan["key"]          # a common slip: "key" for "keys"
+        return plan, raw
 
 class Grounder:
     def __init__(self, model=None):
