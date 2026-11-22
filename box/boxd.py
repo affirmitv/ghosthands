@@ -21,7 +21,8 @@ HTTP API (one JSON object per POST /action, Content-Type application/json, BOX_T
     {"verb": "fill_secret", "name": NAME, "field": "username|password|totp", "x", "y"}
                                                 -> types it only if the front tab is exactly
                                                    https://NAME's host and focus is the right input
-    {"verb": "url"}                             -> {"url": front tab's address, from the DevTools pipe}
+    {"verb": "url"}                             -> {"url": the active tab's address, from the extension}
+    {"verb": "save"}                            -> download what the active tab shows (a PDF)
     {"verb": "downloads"}                       -> {"done": [[name, bytes]], "pending": [name]}
 Coordinates are screen pixels; the client converts ghosthands' 0..1 fractions.
 """
@@ -196,17 +197,22 @@ def type_text(text):
         time.sleep(_rand(0.02, 0.09) + (_rand(0.08, 0.25) if chunk[-1] in " .,@/" else 0))
 
 
-_cdp = None
+_ext = None
+
+
+def ext():
+    """The vault extension link (box/extlink.py), started with boxd."""
+    global _ext
+    if _ext is None:
+        from extlink import ExtLink
+        _ext = ExtLink()
+    return _ext
 
 
 def front_tab():
-    """Origin, URL and focused element of the tab in front, read over the private DevTools pipe
-    (box/cdp.py). Keystrokes and the clipboard are not used: a page can intercept both."""
-    global _cdp
-    if _cdp is None:
-        from cdp import CDP
-        _cdp = CDP()
-    return _cdp.front()
+    """Origin, URL and focused element of the active tab, as the vault extension sees them from
+    its isolated world. Keystrokes and the clipboard are not used: a page can intercept both."""
+    return ext().call("front")
 
 
 def current_url():
@@ -224,12 +230,10 @@ def check_url(url):
 
 
 def navigate(url):
-    """Open an http(s) address in the front tab. Through the DevTools pipe as a typed
-    navigation, not Ctrl+L and typing: a page can swallow Ctrl+L and keep the agent on it, and
-    the address bar's inline autocompletion can turn a typed URL into a different one."""
-    url = check_url(url)
-    front_tab()                      # creates the pipe client
-    _cdp.navigate(url)
+    """Open an http(s) address in the active tab through the vault extension (like a bookmark),
+    not Ctrl+L and typing: a page can swallow Ctrl+L and keep the agent on it, and the address
+    bar's inline autocompletion can turn a typed URL into a different one."""
+    ext().call("navigate", url=check_url(url))
 
 
 # ---------------------------------------------------------------- vault
@@ -303,10 +307,10 @@ _FIELD_TYPES = {"password": {"password"}, "username": {"text", "email", "tel"},
 
 def fill_secret(name, field, x=None, y=None):
     """Click the field at x,y, then put a vault login's username, password or current TOTP code
-    into it. Over the DevTools pipe, in one session on the one visible and focused tab: its
-    origin must be exactly https://<the login's host> and focus must be a writable input of the
-    right type in the top-level page; the value is inserted into that element, not typed through
-    the X display. Errors never carry the value."""
+    into it. The vault extension checks and fills in one synchronous script in its isolated
+    world on the active tab: origin exactly https://<the login's host>, page focused, focus on a
+    writable input of the right type in the top-level page. The value never goes through the X
+    display. Errors never carry the value."""
     e = _vault().get(name)
     if not e:
         raise ValueError("no login %s in this box's vault (host: cred box %s)" % (name, name))
@@ -324,24 +328,23 @@ def fill_secret(name, field, x=None, y=None):
         time.sleep(30 - time.time() % 30 + 0.5)      # code about to roll over: wait before checking
     human_move(x, y); time.sleep(_rand(0.05, 0.12)); click()
     time.sleep(_rand(0.2, 0.35))
-    front_tab()                                       # creates the pipe client
-    from cdp import CDPError
-    try:
-        tab = _cdp.front(strict=True)
-    except CDPError as err:
-        raise PermissionError("refused: %s" % err)
     if field == "totp":
         value = totp(e["totp"])
     else:
         value = e.get("value") if field == "password" else e.get("user")
     if not value:
         raise ValueError("%s has no %s" % (name, field))
+    want = "https://" + _host(e["url"])
     try:
-        return _cdp.insert_secret(tab["targetId"], "https://" + _host(e["url"]), _FIELD_TYPES[field], value)
-    except PermissionError:
-        raise
+        r = ext().call("fill", origin=want, types=sorted(_FIELD_TYPES[field]), value=value)
     except Exception:
         raise RuntimeError("putting the secret in failed") from None
+    if not (r or {}).get("ok"):
+        r = r or {}
+        if r.get("origin") != want:
+            raise PermissionError("refused: the page is %s, not %s" % (r.get("origin"), want))
+        raise PermissionError("refused: focus is on %s type=%s" % (r.get("tag"), r.get("type")))
+    return r.get("origin")
 
 
 # ---------------------------------------------------------------- downloads
@@ -427,6 +430,8 @@ class Handler(BaseHTTPRequestHandler):
                     here = fill_secret(str(req.get("name", "")), str(req.get("field", "password")),
                                        req.get("x"), req.get("y"))
                     return self._reply(200, {"ok": True, "site": here})
+                if verb == "save":
+                    return self._reply(200, ext().call("save"))
                 if verb == "url":
                     return self._reply(200, {"url": current_url()})
                 if verb == "downloads":
@@ -457,5 +462,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    ext()                                   # start listening for the vault extension
     print("boxd on :%d, screen %dx%d, display %s" % (PORT, W, H, DISPLAY), flush=True)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

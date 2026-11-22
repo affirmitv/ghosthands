@@ -55,33 +55,30 @@ VNC_ARGS=(-display "$DISPLAY" -forever -shared -quiet -noxdamage -localhost -rfb
 as ghost x11vnc "${VNC_ARGS[@]}" >/tmp/x11vnc.log 2>&1 &
 as ghost websockify --web /usr/share/novnc 6080 localhost:5900 >/tmp/novnc.log 2>&1 &
 
-# Private DevTools channel (box/cdp.py): two FIFOs in a root-owned folder (ghost may open them
-# through its group but cannot rename or replace them, so root never opens a planted symlink).
-# Root opens them read-write and hands them to Chromium as fds 3 and 4 (--remote-debugging-pipe):
-# the browser user holds them without being able to open them by path, and no page can reach them.
-CDP_DIR=/run/ghostbox-cdp
-install -d -m 750 -o root -g ghost "$CDP_DIR"
-rm -f "$CDP_DIR/in" "$CDP_DIR/out"
-mkfifo -m 660 "$CDP_DIR/in" "$CDP_DIR/out"
-chown root:ghost "$CDP_DIR/in" "$CDP_DIR/out"
+# Vault extension link (box/ext, box/nmhost.py, box/extlink.py): boxd listens on a socket in this
+# folder; only the browser user (group) may reach it, and boxd checks the caller's uid as well.
+install -d -m 750 -o ghost -g browser /run/ghostbox-ext
 
-# Headed Chromium, restarted if it is closed. No --headless, no remote-debugging port,
-# no --enable-automation: from the page's side this is an ordinary desktop browser.
+# Preferred languages (navigator.languages, Accept-Language) to match BOX_LANG, as a person's
+# browser would; --lang alone only sets the browser's own interface language.
+L="${BOX_LANG:-en-US}"
+printf '{"ForcedLanguages": ["%s", "%s"]}\n' "$L" "${L%%-*}" > /etc/chromium/policies/managed/languages.json
+
+# Headed Chromium, restarted if it is closed. No --headless, no remote debugging (port or pipe),
+# no --enable-automation, so navigator.webdriver is false: from the page's side this is an
+# ordinary desktop browser with one extension installed.
 CHROME_FLAGS=(--user-data-dir="$PROFILE" --no-first-run --no-default-browser-check
   --password-store=basic --window-position=0,0 --window-size="${BOX_W},${BOX_H}" --start-maximized
   --disable-dev-shm-usage --hide-crash-restore-bubble --lang="${BOX_LANG:-en-US}" --download-default-directory=/data/downloads
-  --remote-debugging-pipe)
+  --load-extension=/opt/ghostbox/ext --disable-features=DisableLoadExtensionCommandLineSwitch)
 # Chromium's own sandbox needs user namespaces: compose.yml's seccomp profile allows them. On a
 # runtime without that profile, BOX_CHROME_SANDBOX=0 falls back to --no-sandbox (the user split
 # and the container are then the only sandbox).
 [ "${BOX_CHROME_SANDBOX:-1}" = 1 ] || CHROME_FLAGS+=(--no-sandbox --test-type)
 CHROME_ENV=(env -i DISPLAY="$DISPLAY" HOME=/home/browser PATH=/usr/bin:/bin LANG="$LANG" LC_ALL="${LC_ALL:-$LANG}" TZ="${TZ:-UTC}")
-# This loop stays root only to open the pipes for each restart; Chromium itself runs as browser.
 ( while true; do
-    [ -p "$CDP_DIR/in" ] && [ ! -L "$CDP_DIR/in" ] && [ -p "$CDP_DIR/out" ] && [ ! -L "$CDP_DIR/out" ] \
-      || { echo "ghostbox: DevTools pipes are not FIFOs; not starting Chromium" >&2; exit 1; }
     as browser "${CHROME_ENV[@]}" chromium "${CHROME_FLAGS[@]}" "${BOX_START_URL:-about:blank}" \
-      3<>"$CDP_DIR/in" 4<>"$CDP_DIR/out" >/tmp/chromium.log 2>&1 || true
+      >/tmp/chromium.log 2>&1 || true
     rm -f "$PROFILE"/SingletonLock "$PROFILE"/SingletonSocket "$PROFILE"/SingletonCookie; sleep 1
   done ) &
 

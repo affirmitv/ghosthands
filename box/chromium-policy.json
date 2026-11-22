@@ -1,5 +1,4 @@
 {
-  "AlwaysOpenPdfExternally": true,
   "DownloadDirectory": "/data/downloads",
   "PromptForDownloadLocation": false,
   "DownloadRestrictions": 0,

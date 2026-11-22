@@ -5,7 +5,7 @@ FROM debian:bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 TZ=UTC
 RUN apt-get update && apt-get install -y --no-install-recommends \
       xvfb x11-utils x11-xserver-utils openbox xdotool xclip x11vnc novnc python3-websockify \
-      chromium fonts-liberation fonts-noto-core fonts-noto-color-emoji fonts-dejavu-core \
+      chromium libgl1-mesa-dri libegl1 libgles2 mesa-vulkan-drivers fonts-liberation fonts-noto-core fonts-noto-color-emoji fonts-dejavu-core \
       python3 python3-xlib python3-pil python3-serial \
       locales tzdata ca-certificates dbus-x11 \
  && sed -i 's/# en_AU.UTF-8/en_AU.UTF-8/; s/# en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen && locale-gen \
@@ -18,16 +18,19 @@ RUN useradd -m -u 1000 -s /bin/bash ghost && useradd -m -u 1001 -s /usr/sbin/nol
  && usermod -aG browser ghost && mkdir -p /data
 
 COPY box/openbox.xml /etc/ghostbox/openbox.xml
-# PDFs download instead of opening in the built-in viewer; downloads land in /data/downloads unasked.
+# Downloads land in /data/downloads unasked; no password manager or autofill of the browser's own.
 COPY box/chromium-policy.json /etc/chromium/policies/managed/ghostbox.json
-COPY box/boxd.py box/cdp.py box/jobs.py box/entrypoint.sh /opt/ghostbox/
+# The vault extension and its native-messaging host (see box/ext/bg.js).
+COPY box/ext /opt/ghostbox/ext
+COPY box/nmhost.json /etc/chromium/native-messaging-hosts/dev.ghostbox.vault.json
+COPY box/boxd.py box/extlink.py box/nmhost.py box/jobs.py box/entrypoint.sh /opt/ghostbox/
 COPY box/testpage.html /opt/ghostbox/www/index.html
 COPY box/phish.html /opt/ghostbox/www/phish.html
 # The agent itself, so a whole run can live in the container: docker exec -u ghost ghostbox gh-run ...
 COPY ghosthands /opt/ghosthands/ghosthands
 COPY run.py /opt/ghosthands/run.py
 COPY examples /opt/ghosthands/examples
-RUN chmod +x /opt/ghostbox/entrypoint.sh \
+RUN chmod +x /opt/ghostbox/entrypoint.sh /opt/ghostbox/nmhost.py \
  && printf '#!/bin/sh\ncd /opt/ghosthands && exec python3 run.py --target box "$@"\n' > /usr/local/bin/gh-run \
  && chmod +x /usr/local/bin/gh-run
 
