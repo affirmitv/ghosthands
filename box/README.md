@@ -94,14 +94,15 @@ GH_LLM_EXTRA='{"thinking":{"type":"disabled"}}'
   control daemon, the job worker and the agent run as `ghost` and hold the API key, token, VNC
   password and job files. A renderer exploit lands as `browser` and can read none of them.
   It can still see and act on the box's screen, which is the browser's own.
-- Chromium's inner sandbox is off (Docker's default seccomp profile blocks the user namespaces it
-  needs); the user split, `cap_drop: ALL` (only the start-up user switch keeps a few) and
-  `no-new-privileges` stand in. `BOX_CHROME_SANDBOX=1` turns it back on for a runtime that
-  allows it.
-- Known limits: with the sandbox off, one renderer bug gives code as `browser`, which can then
-  watch the X display (keystrokes the box types, not vault values, which go over the pipe) and
-  the box's screen. The vault is plaintext JSON on the volume, readable to anyone with `docker`
-  access on the host. A browser that is itself compromised sees whatever is typed into it.
+- Chromium's own sandbox is on: `chromium-seccomp.json` is Docker's default seccomp profile plus
+  the calls its namespace sandbox needs (`clone`, `clone3`, `unshare`, `setns`, `chroot`), so a
+  renderer bug is contained by Chromium's sandbox and then by the user split, `cap_drop: ALL`
+  and `no-new-privileges`. On a runtime without that profile, `BOX_CHROME_SANDBOX=0` falls back
+  to `--no-sandbox`.
+- Known limits: the vault is plaintext JSON on the volume, readable to anyone with `docker`
+  access on the host. A browser process that is itself compromised (a sandbox escape) sees
+  whatever is put into it and holds the DevTools pipe, so no check inside the box can protect a
+  secret from it.
 - The volume holds the browser's cookies, the vault and job files. Treat it like a signed-in
   laptop.
 

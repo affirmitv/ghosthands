@@ -71,9 +71,10 @@ CHROME_FLAGS=(--user-data-dir="$PROFILE" --no-first-run --no-default-browser-che
   --password-store=basic --window-position=0,0 --window-size="${BOX_W},${BOX_H}" --start-maximized
   --disable-dev-shm-usage --hide-crash-restore-bubble --lang="${BOX_LANG:-en-US}" --download-default-directory=/data/downloads
   --remote-debugging-pipe)
-# Chromium's inner sandbox needs user namespaces, which Docker's default seccomp profile blocks;
-# the separate browser user and the container are the sandbox. BOX_CHROME_SANDBOX=1 retries it.
-[ "${BOX_CHROME_SANDBOX:-0}" = 1 ] || CHROME_FLAGS+=(--no-sandbox --test-type)
+# Chromium's own sandbox needs user namespaces: compose.yml's seccomp profile allows them. On a
+# runtime without that profile, BOX_CHROME_SANDBOX=0 falls back to --no-sandbox (the user split
+# and the container are then the only sandbox).
+[ "${BOX_CHROME_SANDBOX:-1}" = 1 ] || CHROME_FLAGS+=(--no-sandbox --test-type)
 CHROME_ENV=(env -i DISPLAY="$DISPLAY" HOME=/home/browser PATH=/usr/bin:/bin LANG="$LANG" LC_ALL="${LC_ALL:-$LANG}" TZ="${TZ:-UTC}")
 # This loop stays root only to open the pipes for each restart; Chromium itself runs as browser.
 ( while true; do

@@ -164,21 +164,25 @@ class CDP:
         try:
             _, loader = self._frame(s)
             ctx = self._world(s)
-            p = json.loads(self._eval(s, ctx, _PROBE))
+            # Probe, check and mark in one synchronous script: nothing can move focus in between.
+            check = ("(() => { const a = document.activeElement; const r = JSON.parse(" + _PROBE +
+                     "); r.ok = r.origin === %s && !r.inFrame && r.tag === 'INPUT' && !r.readOnly && r.focused"
+                     " && %s.includes((r.type || '').toLowerCase());"
+                     " if (r.ok) { a.value = ''; window.__ghostboxEl = a; } return JSON.stringify(r); })()"
+                     ) % (json.dumps(origin), json.dumps(sorted(types)))
+            p = json.loads(self._eval(s, ctx, check))
             if p.get("origin") != origin:
                 raise PermissionError("refused: the page is %s, not %s" % (p.get("origin"), origin))
-            if p.get("inFrame") or p.get("tag") != "INPUT" or p.get("readOnly") or not p.get("focused") \
-                    or (p.get("type") or "").lower() not in types:
+            if not p.get("ok"):
                 raise PermissionError("refused: focus is on %s type=%s" % (p.get("tag"), p.get("type")))
-            # Clear the field from the isolated world (fires no page event, unlike select()), mark
-            # the element we checked, insert, then confirm the same document and element.
-            self._eval(s, ctx, "(() => { const a = document.activeElement; a.value = ''; "
-                               "window.__ghostboxEl = a; return true; })()")
             self.call("Input.insertText", {"text": value}, session=s)
-            _, loader2 = self._frame(s)
-            same = self._eval(s, ctx, "document.activeElement === window.__ghostboxEl && "
-                                      "location.origin === %s" % json.dumps(origin))
-            self._eval(s, ctx, "delete window.__ghostboxEl, true")
+            try:
+                _, loader2 = self._frame(s)
+                same = self._eval(s, ctx, "(() => { const ok = document.activeElement === window.__ghostboxEl"
+                                          " && location.origin === %s; delete window.__ghostboxEl; return ok; })()"
+                                          % json.dumps(origin))
+            except CDPError:
+                loader2, same = None, False          # context gone after the insert: the page changed
             if loader2 != loader or same is not True:
                 try:
                     self._eval(s, ctx, "(() => { const a = document.activeElement; "

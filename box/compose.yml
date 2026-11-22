@@ -10,7 +10,9 @@ services:
     # Root only long enough to set up the volume and switch users; then nothing holds a capability.
     cap_drop: [ALL]
     cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
-    security_opt: ["no-new-privileges:true"]
+    # Docker's default seccomp profile plus the calls Chromium's own sandbox needs (user, pid and
+    # net namespaces); with it, a renderer bug no longer means code as the browser user.
+    security_opt: ["no-new-privileges:true", "seccomp=./chromium-seccomp.json"]
     environment:
       BOX_W: ${BOX_W:-1440}
       BOX_H: ${BOX_H:-900}
@@ -18,7 +20,7 @@ services:
       GH_BOX_TOKEN: ${BOX_TOKEN:-}
       BOX_VNC_PASSWORD: ${BOX_VNC_PASSWORD:-}
       BOX_VNC_INPUT: ${BOX_VNC_INPUT:-0}
-      BOX_CHROME_SANDBOX: ${BOX_CHROME_SANDBOX:-0}
+      BOX_CHROME_SANDBOX: ${BOX_CHROME_SANDBOX:-1}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       # passed through only when set on the host (see box/ghostbox)
       GH_API_KEY:

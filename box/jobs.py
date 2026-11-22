@@ -109,6 +109,15 @@ def jdir(jid):
     return os.path.join(ROOT, jid)
 
 
+_CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def clean(text):
+    """Web- and model-written text (answers, file names, log lines) without control characters,
+    so printing it cannot drive the owner's terminal with escape sequences."""
+    return _CTRL.sub("?", str(text))
+
+
 def read(path, default=""):
     try:
         with open(path) as f:
@@ -161,7 +170,7 @@ def summary(jid):
     except ValueError:
         goal = ""
     steps = len(glob.glob(os.path.join(jdir(jid), "step*.jpg")))
-    return "%-19s %-9s %3d  %s" % (jid, state(jid), steps, goal.replace("\n", " "))
+    return "%-19s %-9s %3d  %s" % (jid, state(jid), steps, clean(goal.replace("\n", " ")))
 
 
 def run_one(jid):
@@ -226,22 +235,22 @@ def main():
             sys.exit("no job %s" % a.id)
         print(summary(a.id))
         for cp in sorted(glob.glob(os.path.join(d, "CHECKPOINT_step*.txt"))):
-            print("checkpoint %s: %s" % (os.path.basename(cp)[11:18], read(cp)))
+            print("checkpoint %s: %s" % (os.path.basename(cp)[11:18], clean(read(cp))))
         for line in read(os.path.join(d, "log.jsonl")).splitlines():
             try:
                 e = json.loads(line)
-                print("  %s %3s %-10s %s" % (e["t"], e["step"], e["kind"], e["summary"]))
+                print("  %s %3s %-10s %s" % (clean(e["t"]), clean(e["step"]), clean(e["kind"]), clean(e["summary"])))
             except (ValueError, KeyError):
                 pass
         r = read(os.path.join(d, "result"))
         if r:
-            print("result: %s" % r)
+            print("result: %s" % clean(r))
         got = read(os.path.join(d, "downloads"))
         if got:
-            print("downloaded: %s" % ", ".join(got.splitlines()))
+            print("downloaded: %s" % clean(", ".join(got.splitlines())))
         ans = read(os.path.join(d, "answer.txt"))
         if ans:
-            print("answer: %s" % ans)
+            print("answer: %s" % clean(ans))
     elif a.cmd in ("ok", "abort"):
         if state(a.id) != "waiting":
             sys.exit("job %s is %s, not waiting at a checkpoint" % (a.id, state(a.id)))
