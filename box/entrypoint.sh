@@ -41,6 +41,9 @@ for _ in $(seq 50); do as ghost xdpyinfo >/dev/null 2>&1 && break; sleep 0.1; do
 as ghost xhost +SI:localuser:browser >/dev/null
 
 as ghost env HOME=/home/ghost openbox --config-file /etc/ghostbox/openbox.xml &
+# A taskbar, like any desktop: it reserves the bottom of the screen, so screen.availHeight is
+# less than screen.height (a bare X screen with neither is a server's tell).
+sleep 0.5; as ghost env HOME=/home/ghost tint2 -c /etc/ghostbox/tint2rc >/dev/null 2>&1 &
 
 # Viewer: VNC on 5900 (loopback), noVNC on 6080. Watch-only unless BOX_VNC_INPUT=1, so a stray
 # click from whoever is watching cannot steer a run. Always a password (the box's own browser can
@@ -55,6 +58,10 @@ VNC_ARGS=(-display "$DISPLAY" -forever -shared -quiet -noxdamage -localhost -rfb
 as ghost x11vnc "${VNC_ARGS[@]}" >/tmp/x11vnc.log 2>&1 &
 as ghost websockify --web /usr/share/novnc 6080 localhost:5900 >/tmp/novnc.log 2>&1 &
 
+# A machine id, as every Linux install has (Chrome reads it); kept on the volume so it is stable.
+[ -s /data/machine-id ] || python3 -c 'import uuid;print(uuid.uuid4().hex)' > /data/machine-id
+cp /data/machine-id /etc/machine-id
+
 # Vault extension link (box/ext, box/nmhost.py, box/extlink.py): boxd listens on a socket in this
 # folder; only the browser user (group) may reach it, and boxd checks the caller's uid as well.
 install -d -m 750 -o ghost -g browser /run/ghostbox-ext
@@ -62,7 +69,7 @@ install -d -m 750 -o ghost -g browser /run/ghostbox-ext
 # Preferred languages (navigator.languages, Accept-Language) to match BOX_LANG, as a person's
 # browser would; --lang alone only sets the browser's own interface language.
 L="${BOX_LANG:-en-US}"
-printf '{"ForcedLanguages": ["%s", "%s"]}\n' "$L" "${L%%-*}" > /etc/chromium/policies/managed/languages.json
+printf '{"ForcedLanguages": ["%s", "%s"]}\n' "$L" "${L%%-*}" > /etc/opt/chrome/policies/managed/languages.json
 
 # Headed Chromium, restarted if it is closed. No --headless, no remote debugging (port or pipe),
 # no --enable-automation, so navigator.webdriver is false: from the page's side this is an
@@ -70,14 +77,18 @@ printf '{"ForcedLanguages": ["%s", "%s"]}\n' "$L" "${L%%-*}" > /etc/chromium/pol
 CHROME_FLAGS=(--user-data-dir="$PROFILE" --no-first-run --no-default-browser-check
   --password-store=basic --window-position=0,0 --window-size="${BOX_W},${BOX_H}" --start-maximized
   --disable-dev-shm-usage --hide-crash-restore-bubble --lang="${BOX_LANG:-en-US}" --download-default-directory=/data/downloads
-  --load-extension=/opt/ghostbox/ext --disable-features=DisableLoadExtensionCommandLineSwitch)
+  --use-gl=angle --use-angle=gl --ignore-gpu-blocklist)
+# WebGL through ANGLE on Mesa's software OpenGL (llvmpipe): what a Linux PC without GPU drivers
+# reports. A container has no GPU; SwiftShader, Chrome's own fallback, is the headless signature.
 # Chromium's own sandbox needs user namespaces: compose.yml's seccomp profile allows them. On a
 # runtime without that profile, BOX_CHROME_SANDBOX=0 falls back to --no-sandbox (the user split
 # and the container are then the only sandbox).
 [ "${BOX_CHROME_SANDBOX:-1}" = 1 ] || CHROME_FLAGS+=(--no-sandbox --test-type)
+# Extra Chromium flags, space-separated (for experiments; see box/webgl.html)
+[ -z "${BOX_CHROME_EXTRA:-}" ] || read -r -a _extra <<< "$BOX_CHROME_EXTRA" && CHROME_FLAGS+=(${_extra[@]+"${_extra[@]}"})
 CHROME_ENV=(env -i DISPLAY="$DISPLAY" HOME=/home/browser PATH=/usr/bin:/bin LANG="$LANG" LC_ALL="${LC_ALL:-$LANG}" TZ="${TZ:-UTC}")
 ( while true; do
-    as browser "${CHROME_ENV[@]}" chromium "${CHROME_FLAGS[@]}" "${BOX_START_URL:-about:blank}" \
+    as browser "${CHROME_ENV[@]}" google-chrome-stable "${CHROME_FLAGS[@]}" "${BOX_START_URL:-about:blank}" \
       >/tmp/chromium.log 2>&1 || true
     rm -f "$PROFILE"/SingletonLock "$PROFILE"/SingletonSocket "$PROFILE"/SingletonCookie; sleep 1
   done ) &

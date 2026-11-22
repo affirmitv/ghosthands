@@ -21,6 +21,7 @@ services:
       BOX_VNC_PASSWORD: ${BOX_VNC_PASSWORD:-}
       BOX_VNC_INPUT: ${BOX_VNC_INPUT:-0}
       BOX_CHROME_SANDBOX: ${BOX_CHROME_SANDBOX:-1}
+      BOX_CHROME_EXTRA: ${BOX_CHROME_EXTRA:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       # passed through only when set on the host (see box/ghostbox)
       GH_API_KEY:

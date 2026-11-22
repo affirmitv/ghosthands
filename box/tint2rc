@@ -1,0 +1,18 @@
+# ghostbox taskbar: a plain bottom panel (task list + clock) that reserves its strip of the screen.
+panel_items = TC
+panel_size = 100% 36
+panel_position = bottom center horizontal
+panel_layer = top
+strut_policy = follow_size
+panel_background_id = 1
+backgrounds = 1
+background_color = #202124 100
+border_width = 0
+rounded = 0
+task_text = 1
+task_font = sans 10
+task_font_color = #e8eaed 100
+task_maximum_size = 220 30
+time1_format = %H:%M
+time1_font = sans 10
+clock_font_color = #e8eaed 100

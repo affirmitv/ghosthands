@@ -1,7 +1,7 @@
 {
-  "name": "dev.ghostbox.vault",
-  "description": "ghostbox vault extension <-> boxd",
-  "path": "/opt/ghostbox/nmhost.py",
-  "type": "stdio",
-  "allowed_origins": ["chrome-extension://hilcghcloppdhhjddlgomhfnemecoahp/"]
+ "name": "dev.ghostbox.vault",
+ "description": "ghostbox vault extension <-> boxd",
+ "path": "/opt/ghostbox/nmhost.py",
+ "type": "stdio",
+ "allowed_origins": []
 }
