@@ -94,8 +94,10 @@ GH_LLM_EXTRA='{"thinking":{"type":"disabled"}}'
   control daemon, the job worker and the agent run as `ghost` and hold the API key, token, VNC
   password and job files. A renderer exploit lands as `browser` and can read none of them.
   It can still see and act on the box's screen, which is the browser's own.
-- Chromium's own sandbox is on: `chromium-seccomp.json` is Docker's default seccomp profile plus
-  the calls its namespace sandbox needs (`clone`, `clone3`, `unshare`, `setns`, `chroot`), so a
+- Chromium's own sandbox is on: `chromium-seccomp.json` is Docker's current default seccomp
+  profile (io_uring blocked) plus `clone`/`unshare` restricted to the user, PID and network
+  namespace flags and `chroot`, which Chromium's namespace sandbox needs (no `setns`; `clone3`
+  still returns ENOSYS so libc uses the filterable `clone`). So a
   renderer bug is contained by Chromium's sandbox and then by the user split, `cap_drop: ALL`
   and `no-new-privileges`. On a runtime without that profile, `BOX_CHROME_SANDBOX=0` falls back
   to `--no-sandbox`.
