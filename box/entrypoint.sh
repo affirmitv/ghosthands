@@ -86,7 +86,9 @@ CHROME_FLAGS=(--user-data-dir="$PROFILE" --no-first-run --no-default-browser-che
 [ "${BOX_CHROME_SANDBOX:-1}" = 1 ] || CHROME_FLAGS+=(--no-sandbox --test-type)
 # Extra Chromium flags, space-separated (for experiments; see box/webgl.html)
 [ -z "${BOX_CHROME_EXTRA:-}" ] || read -r -a _extra <<< "$BOX_CHROME_EXTRA" && CHROME_FLAGS+=(${_extra[@]+"${_extra[@]}"})
-CHROME_ENV=(env -i DISPLAY="$DISPLAY" HOME=/home/browser PATH=/usr/bin:/bin LANG="$LANG" LC_ALL="${LC_ALL:-$LANG}" TZ="${TZ:-UTC}")
+# Chrome on Linux takes its locale (Intl, date formats) from LANG, not --lang: follow BOX_LANG.
+CHROME_LOCALE="${L/-/_}.UTF-8"; locale -a 2>/dev/null | grep -qi "^${CHROME_LOCALE%.UTF-8}.utf8$" || CHROME_LOCALE="$LANG"
+CHROME_ENV=(env -i DISPLAY="$DISPLAY" HOME=/home/browser PATH=/usr/bin:/bin LANG="$CHROME_LOCALE" LC_ALL="$CHROME_LOCALE" TZ="${TZ:-UTC}")
 ( while true; do
     as browser "${CHROME_ENV[@]}" google-chrome-stable "${CHROME_FLAGS[@]}" "${BOX_START_URL:-about:blank}" \
       >/tmp/chromium.log 2>&1 || true
