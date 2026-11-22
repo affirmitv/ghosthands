@@ -8,6 +8,8 @@ def _chat(model, messages, max_tokens=400, temperature=0.0, extra=None, usage_ou
     """One chat completion. `extra` merges into the request body (e.g. a reasoning cap);
     `usage_out`, a list, receives the response's usage dict when given."""
     body = {"model": model, "temperature": temperature, "max_tokens": max_tokens, "messages": messages}
+    if Config.llm_extra is not None:
+        extra = Config.llm_extra            # the provider's own knobs replace the OpenRouter ones
     if extra:
         body.update(extra)
     last = "no response"
@@ -53,7 +55,7 @@ Reply with ONE JSON object ONLY -- no prose, no markdown fences. Schema:
 {
   "observation": "<what is on screen that matters for the goal>",
   "reasoning": "<one line: why this action>",
-  "action": "click | double_click | type | key | scroll | navigate | wait | verify_stop | done",
+  "action": "click | double_click | type | key | scroll | navigate | fill_secret | wait | verify_stop | done",
   "target": "<click/double_click: a SHORT unambiguous description of the ONE element, e.g. 'the blue Create subscription button, top right'>",
   "text": "<type: the exact literal text>",
   "keys": "<key: e.g. return | tab | escape | cmd+a>",
@@ -61,7 +63,10 @@ Reply with ONE JSON object ONLY -- no prose, no markdown fences. Schema:
   "amount": 5,
   "url": "<navigate: full https URL>",
   "seconds": 1.5,
-  "reason": "<verify_stop: why a human must look>"
+  "reason": "<verify_stop: why a human must look>",
+  "credential": "<fill_secret: a login NAME from LOGINS YOU MAY USE>",
+  "field": "<fill_secret: username | password | totp>",
+  "answer": "<done: what you found or did, written for the person who asked; quote values exactly>"
 }
 
 Rules:
@@ -77,7 +82,8 @@ Rules:
 - On ANYTHING unexpected -- an error, a login/2FA/captcha wall, a dialog not in the playbook,
   a permanent/immutable field you are unsure about -- choose 'verify_stop' with a clear reason.
   Never guess on a money screen. Product IDs are PERMANENT once created; type them EXACTLY.
-- Choose 'done' only when the whole GOAL is achieved and visible on screen.
+- Choose 'done' only when the whole GOAL is achieved and visible on screen. If the goal asks
+  you to find, read or check something, put the result in "answer".
 """
 
 # A reasoning planner (GLM-5.3-flash is one) can spend the whole token budget thinking and return

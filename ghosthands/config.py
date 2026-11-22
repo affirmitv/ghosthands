@@ -1,8 +1,8 @@
 """Central config for ghosthands. Everything overridable via environment."""
-import os, re
+import json, os, re
 
 def _load_key():
-    k = os.environ.get("OPENROUTER_API_KEY")
+    k = os.environ.get("GH_API_KEY") or os.environ.get("OPENROUTER_API_KEY")
     if k:
         return k.strip()
     kf = os.environ.get("GH_KEY_FILE", os.path.expanduser("~/.config/ghosthands/openrouter.env"))
@@ -16,6 +16,9 @@ def _load_key():
 class Config:
     api_key        = _load_key()
     base_url       = os.environ.get("GH_BASE_URL", "https://openrouter.ai/api/v1")
+    # Provider-specific fields merged into every chat request, as JSON. When set it REPLACES the
+    # built-in OpenRouter reasoning cap, e.g. z.ai: GH_LLM_EXTRA='{"thinking":{"type":"disabled"}}'
+    llm_extra      = json.loads(os.environ.get("GH_LLM_EXTRA") or "null")
     # Planner = the "brain": a cheap VISION LLM that sees the screen and decides the next action.
     planner_model  = os.environ.get("GH_PLANNER_MODEL", "z-ai/glm-5.3-flash")
     # Grounder = the "eyes->coords": a GUI grounding model that turns "click X" into a pixel.
@@ -80,4 +83,8 @@ class Config:
     tmac_vm        = os.environ.get("GH_TMAC_VM", "default")
     tmac_bin       = os.environ.get("GH_TMAC_BIN")          # default: terminal-mac on PATH, then ~/.local/bin
     tmac_timeout   = int(os.environ.get("GH_TMAC_TIMEOUT", "20"))  # seconds per guest action
+    # "box" = the ghostbox container (box/): Xvfb + headed Chromium, driven over its HTTP API.
+    box_url        = os.environ.get("GH_BOX_URL", "http://127.0.0.1:8780")
+    box_token      = os.environ.get("GH_BOX_TOKEN", "")
+    box_timeout    = float(os.environ.get("GH_BOX_TIMEOUT", "60"))  # seconds per box action
     runs_dir       = os.environ.get("GH_RUNS_DIR", os.path.expanduser("~/gh-runs"))

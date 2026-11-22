@@ -1,0 +1,34 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>ghostbox input check</title>
+<style>
+  body { font: 18px/1.35 system-ui, sans-serif; margin: 0; height: 200vh; background: #f4f4f0; color: #111; }
+  #f { position: fixed; left: 25vw; top: 40vh; transform: translate(-50%, -50%); font-size: 22px; width: 320px; }
+  #b { position: fixed; left: 25vw; top: 55vh; transform: translate(-50%, -50%); font-size: 22px; padding: 8px 24px; }
+  #log { position: fixed; right: 2vw; top: 2vh; width: 45vw; height: 94vh; overflow: hidden; font: 15px/1.3 monospace;
+         background: #fff; border: 1px solid #999; padding: 8px; white-space: pre; }
+  #sum { position: fixed; left: 2vw; top: 4vh; width: 46vw; font: bold 20px system-ui; }
+</style></head>
+<body>
+<div id="sum">waiting for input…</div>
+<input id="f" placeholder="type here">
+<button id="b">Press me</button>
+<div id="log"></div>
+<script>
+  const log = document.getElementById('log'), sum = document.getElementById('sum');
+  let n = 0, untrusted = 0, moves = 0, path = 0, lx = null, ly = null;
+  function add(s) { log.textContent = (s + '\n' + log.textContent).slice(0, 4000); }
+  function upd() { sum.textContent = `${n} events · untrusted ${untrusted} · mousemoves ${moves} · path ${Math.round(path)}px · webdriver=${navigator.webdriver}`; }
+  for (const t of ['mousedown','mouseup','click','dblclick','keydown','wheel','input','focus']) {
+    addEventListener(t, e => {
+      n++; if (!e.isTrusted) untrusted++;
+      const k = e.key ? ` key=${e.key}` : '', d = e.deltaY ? ` dy=${e.deltaY}` : '';
+      add(`${t.padEnd(9)} trusted=${e.isTrusted}${k}${d}`); upd();
+    }, true);
+  }
+  addEventListener('mousemove', e => {
+    moves++; if (!e.isTrusted) untrusted++;
+    if (lx !== null) path += Math.hypot(e.clientX - lx, e.clientY - ly); lx = e.clientX; ly = e.clientY; upd();
+  }, true);
+  upd();
+</script>
+</body></html>
