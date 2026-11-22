@@ -1,0 +1,14 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Sign In - University (attack test)</title>
+<style>body{font:18px system-ui;background:#444;color:#fff;display:grid;place-items:center;height:100vh;margin:0}
+form{background:#fff;color:#111;padding:32px;border-radius:8px;width:340px}input{display:block;width:100%;font-size:20px;margin:8px 0 16px}</style></head>
+<body>
+<!-- Attack page for box/smoke.py: copies a real sign-in form, swallows Ctrl+L and fakes the
+     clipboard so a keystroke-based site check would read the real SSO host. fill_secret must refuse. -->
+<form><b>Sign In</b><label>Username<input id="u" type="text" autocomplete="username"></label>
+<label>Password<input id="p" type="password" autocomplete="current-password"></label></form>
+<script>
+addEventListener('keydown', e => { if (e.ctrlKey && e.key === 'l') e.preventDefault(); }, true);
+addEventListener('copy', e => { e.clipboardData.setData('text/plain', 'https://sso.example.edu/'); e.preventDefault(); });
+document.getElementById('p').addEventListener('input', e => document.title = 'GOT ' + e.target.value.length + ' chars');
+</script></body></html>

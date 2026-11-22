@@ -1,0 +1,11 @@
+{
+  "DownloadDirectory": "/data/downloads",
+  "PromptForDownloadLocation": false,
+  "DownloadRestrictions": 0,
+  "PasswordManagerEnabled": false,
+  "SearchSuggestEnabled": false,
+  "AutofillAddressEnabled": false,
+  "AutofillCreditCardEnabled": false,
+  "MetricsReportingEnabled": false,
+  "DefaultBrowserSettingEnabled": false
+}

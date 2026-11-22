@@ -136,6 +136,20 @@ The guest is still a separate Mac with its own accounts: it does not have your s
 and it stops at its login screen until someone signs in. Input there is synthetic (CGEvent inside
 the guest), so for sites that look for a real human device, use the HID target.
 
+## Run it in Docker, no hardware (ghostbox)
+
+`box/` builds a Linux container with its own screen (Xvfb), a headed Chromium and virtual hands
+(XTEST input with curved pointer paths and human typing timing; the browser sees every event as
+trusted). It takes a queue of jobs and reports what it found:
+
+```bash
+box/ghostbox up
+box/ghostbox do "Find the latest stable Python release on python.org" -g "put the version in answer"
+box/ghostbox jobs; box/ghostbox show ID
+```
+
+Watch it at http://localhost:6080. Details, models and limits: [box/README.md](box/README.md).
+
 ## The Jev fast lane
 
 **Status: optional and experimental, still under development.** The vision lane is the default.

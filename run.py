@@ -2,7 +2,7 @@
 """ghosthands CLI:  python3 run.py --goal-file examples/streamon3_subscriptions.py
 or drive a one-off:  python3 run.py --goal "..." --guide "..." """
 import argparse, importlib.util, os, sys
-from ghosthands import Planner, Grounder, JevPlanner, Agent, make_hands, make_terminal_mac, Config
+from ghosthands import Planner, Grounder, JevPlanner, Agent, make_hands, make_terminal_mac, make_box, Config
 
 def load_task(path):
     spec = importlib.util.spec_from_file_location("gh_task", path)
@@ -17,8 +17,9 @@ def main():
     ap.add_argument("--max-steps", type=int, default=80)
     ap.add_argument("--hands", default=None, help="pico | dryrun | cliclick")
     ap.add_argument("--planner", default=None, help="vision (screenshot LLM) | jev (Safari element table + Jev decisions)")
-    ap.add_argument("--target", default=None, help="mac (this screen, default) | terminal-mac (a terminal-mac guest VM)")
+    ap.add_argument("--target", default=None, help="mac (this screen, default) | terminal-mac (a terminal-mac guest VM) | box (the ghostbox Docker container)")
     ap.add_argument("--vm", default=None, help="terminal-mac VM name (default: default)")
+    ap.add_argument("--box-url", default=None, help="ghostbox control URL (default: GH_BOX_URL or http://127.0.0.1:8780)")
     a = ap.parse_args()
     if a.goal_file:
         goal, guide, max_steps = load_task(a.goal_file)
@@ -35,11 +36,16 @@ def main():
             print("--planner jev reads this Mac's Safari; use the vision planner with --target terminal-mac"); sys.exit(2)
         eyes, hands = make_terminal_mac(a.vm)
         hands_name = "terminal-mac:%s" % hands.vm.name
+    elif target == "box":
+        if planner_kind == "jev":
+            print("--planner jev reads this Mac's Safari; use the vision planner with --target box"); sys.exit(2)
+        eyes, hands = make_box(a.box_url)
+        hands_name = "box:%s" % hands.box.url
     elif target == "mac":
         eyes, hands = None, make_hands(a.hands)
         hands_name = a.hands or Config.hands_backend
     else:
-        print("unknown --target %r (mac | terminal-mac)" % target); sys.exit(2)
+        print("unknown --target %r (mac | terminal-mac | box)" % target); sys.exit(2)
     planner = JevPlanner() if planner_kind == "jev" else Planner()
     agent = Agent(planner, Grounder(), hands, eyes=eyes, run_dir=a.run_dir)
     print("planner=%s grounder=%s hands=%s run_dir=%s" % (

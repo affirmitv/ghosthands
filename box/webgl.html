@@ -1,0 +1,13 @@
+<!doctype html><html><head><meta charset="utf-8"><title>webgl check</title></head>
+<body style="font:20px monospace;padding:24px"><pre id="o">...</pre><script>
+const c = document.createElement('canvas'); const out = [];
+for (const k of ['webgl2', 'webgl']) {
+  const g = c.getContext(k);
+  if (!g) { out.push(k + ': none'); continue; }
+  const d = g.getExtension('WEBGL_debug_renderer_info');
+  out.push(k + ': ' + (d ? g.getParameter(d.UNMASKED_VENDOR_WEBGL) + ' | ' + g.getParameter(d.UNMASKED_RENDERER_WEBGL) : g.getParameter(g.RENDERER)));
+}
+out.push('cores ' + navigator.hardwareConcurrency + ' mem ' + navigator.deviceMemory + ' screen ' + screen.width + 'x' + screen.height + ' avail ' + screen.availWidth + 'x' + screen.availHeight + ' dpr ' + devicePixelRatio);
+out.push('brands ' + JSON.stringify((navigator.userAgentData || {}).brands));
+document.getElementById('o').textContent = out.join('\n');
+</script></body></html>

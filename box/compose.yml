@@ -1,0 +1,40 @@
+# docker compose -f box/compose.yml up -d --build
+# Watch it: http://localhost:6080  (noVNC, view-only by default)
+services:
+  ghostbox:
+    build: { context: .., dockerfile: box/Dockerfile }
+    image: ghostbox
+    container_name: ghostbox
+    hostname: ghostbox           # stable, so Chromium recognises its own profile lock after a recreate
+    shm_size: 2gb
+    # Root only long enough to set up the volume and switch users; then nothing holds a capability.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    # Docker's default seccomp profile plus the calls Chromium's own sandbox needs (user, pid and
+    # net namespaces); with it, a renderer bug no longer means code as the browser user.
+    security_opt: ["no-new-privileges:true", "seccomp=./chromium-seccomp.json"]
+    environment:
+      BOX_W: ${BOX_W:-1440}
+      BOX_H: ${BOX_H:-900}
+      BOX_TOKEN: ${BOX_TOKEN:-}
+      GH_BOX_TOKEN: ${BOX_TOKEN:-}
+      BOX_VNC_PASSWORD: ${BOX_VNC_PASSWORD:-}
+      BOX_VNC_INPUT: ${BOX_VNC_INPUT:-0}
+      BOX_CHROME_SANDBOX: ${BOX_CHROME_SANDBOX:-1}
+      BOX_CHROME_EXTRA: ${BOX_CHROME_EXTRA:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # passed through only when set on the host (see box/ghostbox)
+      GH_API_KEY:
+      GH_BASE_URL:
+      GH_PLANNER_MODEL:
+      GH_GROUNDER_MODEL:
+      GH_LLM_EXTRA:
+      TZ: ${TZ:-UTC}
+      BOX_LANG: ${BOX_LANG:-en-US}
+    ports:                       # loopback only: nothing on the LAN can drive or watch it
+      - "127.0.0.1:8780:8780"    # boxd control API
+      - "127.0.0.1:6080:6080"    # noVNC viewer
+    volumes:
+      - ghostbox-data:/data      # browser profile (cookies, logins), downloads, run logs
+volumes:
+  ghostbox-data:

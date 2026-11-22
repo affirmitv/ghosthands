@@ -1,0 +1,18 @@
+{
+ "manifest_version": 3,
+ "name": "ghostbox vault",
+ "version": "1.0",
+ "description": "Fills the box's logins only on their own sites, and opens pages for the agent. Talks only to the box's control daemon (native messaging).",
+ "permissions": [
+  "nativeMessaging",
+  "tabs",
+  "scripting",
+  "downloads"
+ ],
+ "host_permissions": [
+  "<all_urls>"
+ ],
+ "background": {
+  "service_worker": "bg.js"
+ }
+}
