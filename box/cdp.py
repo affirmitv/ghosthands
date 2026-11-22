@@ -113,8 +113,12 @@ class CDP:
         except CDPError:
             pass
 
+    def _frame(self, s):
+        f = self.call("Page.getFrameTree", session=s)["frameTree"]["frame"]
+        return f["id"], f.get("loaderId")
+
     def _world(self, s):
-        frame = self.call("Page.getFrameTree", session=s)["frameTree"]["frame"]["id"]
+        frame, _ = self._frame(s)
         return self.call("Page.createIsolatedWorld", {"frameId": frame, "worldName": "ghostbox"},
                          session=s)["executionContextId"]
 
@@ -158,6 +162,7 @@ class CDP:
         only, not through the X display). Nothing is inserted if any check fails."""
         s = self._attach(target_id)
         try:
+            _, loader = self._frame(s)
             ctx = self._world(s)
             p = json.loads(self._eval(s, ctx, _PROBE))
             if p.get("origin") != origin:
@@ -165,8 +170,22 @@ class CDP:
             if p.get("inFrame") or p.get("tag") != "INPUT" or p.get("readOnly") or not p.get("focused") \
                     or (p.get("type") or "").lower() not in types:
                 raise PermissionError("refused: focus is on %s type=%s" % (p.get("tag"), p.get("type")))
-            self._eval(s, ctx, "document.activeElement.select(), true")
+            # Clear the field from the isolated world (fires no page event, unlike select()), mark
+            # the element we checked, insert, then confirm the same document and element.
+            self._eval(s, ctx, "(() => { const a = document.activeElement; a.value = ''; "
+                               "window.__ghostboxEl = a; return true; })()")
             self.call("Input.insertText", {"text": value}, session=s)
+            _, loader2 = self._frame(s)
+            same = self._eval(s, ctx, "document.activeElement === window.__ghostboxEl && "
+                                      "location.origin === %s" % json.dumps(origin))
+            self._eval(s, ctx, "delete window.__ghostboxEl, true")
+            if loader2 != loader or same is not True:
+                try:
+                    self._eval(s, ctx, "(() => { const a = document.activeElement; "
+                                       "if (a && 'value' in a) a.value = ''; return true; })()")
+                except CDPError:
+                    pass
+                raise PermissionError("the page changed while the secret went in; cleared and stopped")
             return p["origin"]
         finally:
             self._detach(s)
